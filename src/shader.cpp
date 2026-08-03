@@ -1,9 +1,6 @@
-#include "renderer.h"
+#include "shader.h"
 
 #include <cstdio>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -17,57 +14,56 @@ static_assert(std::is_standard_layout_v<Vec3>,
 static_assert(sizeof(Vec3) == 3 * sizeof(float),
               "Vec3 must contain exactly three packed floats");
 
-std::filesystem::path findShader(const char* filename)
+constexpr char kParticleVertexShader[] =
+    // language=GLSL
+    R"glsl(#version 460 core
+
+layout(location = 0) in vec3 aPosition;
+
+uniform mat4 uViewProjection;
+
+out float vDepth;
+
+void main()
 {
-    const std::filesystem::path runtimePath =
-        std::filesystem::path("shaders") / filename;
-    if (std::filesystem::exists(runtimePath)) {
-        return runtimePath;
-    }
+    gl_Position = uViewProjection * vec4(aPosition, 1.0);
+    gl_PointSize = 6.0;
 
-#ifdef PBF_SHADER_DIR
-    const std::filesystem::path sourcePath =
-        std::filesystem::path(PBF_SHADER_DIR) / filename;
-    if (std::filesystem::exists(sourcePath)) {
-        return sourcePath;
-    }
-#endif
-
-    throw std::runtime_error(
-        "Cannot find shader file: " + runtimePath.string()
-    );
+    vDepth = clamp(aPosition.y, 0.0, 1.0);
 }
+)glsl";
 
-std::string readTextFile(const std::filesystem::path& path)
+constexpr char kParticleFragmentShader[] =
+    // language=GLSL
+    R"glsl(#version 460 core
+
+in float vDepth;
+
+layout(location = 0) out vec4 fragColor;
+
+void main()
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        throw std::runtime_error("Cannot open shader file: " + path.string());
+    float distanceToCenter = length(gl_PointCoord - vec2(0.5));
+    float edgeWidth = fwidth(distanceToCenter);
+    float alpha = 1.0 - smoothstep(0.5 - edgeWidth, 0.5, distanceToCenter);
+
+    if (alpha <= 0.0) {
+        discard;
     }
 
-    std::ostringstream contents;
-    contents << file.rdbuf();
-    if (file.bad()) {
-        throw std::runtime_error("Cannot read shader file: " + path.string());
-    }
-
-    std::string source = contents.str();
-    if (source.empty()) {
-        throw std::runtime_error("Shader file is empty: " + path.string());
-    }
-
-    return source;
+    vec3 color = vec3(0.05, 0.35 + 0.55 * vDepth, 1.0);
+    fragColor = vec4(color, alpha);
 }
+)glsl";
 
 GLuint compileShader(
     GLenum type,
-    const std::string& source,
-    const std::filesystem::path& path
+    const char* source,
+    const char* name
 )
 {
     const GLuint shader = glCreateShader(type);
-    const char* sourcePointer = source.c_str();
-    glShaderSource(shader, 1, &sourcePointer, nullptr);
+    glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
 
     GLint success = GL_FALSE;
@@ -92,7 +88,7 @@ GLuint compileShader(
         stderr,
         "Failed to compile %s '%s':\n%s\n",
         typeName,
-        path.string().c_str(),
+        name,
         log.c_str()
     );
 
@@ -102,15 +98,10 @@ GLuint compileShader(
 
 GLuint createParticleProgram()
 {
-    const std::filesystem::path vertexPath = findShader("particle.vert");
-    const std::filesystem::path fragmentPath = findShader("particle.frag");
-    const std::string vertexSource = readTextFile(vertexPath);
-    const std::string fragmentSource = readTextFile(fragmentPath);
-
     const GLuint vertexShader = compileShader(
         GL_VERTEX_SHADER,
-        vertexSource,
-        vertexPath
+        kParticleVertexShader,
+        "embedded particle vertex shader"
     );
     if (vertexShader == 0) {
         return 0;
@@ -118,8 +109,8 @@ GLuint createParticleProgram()
 
     const GLuint fragmentShader = compileShader(
         GL_FRAGMENT_SHADER,
-        fragmentSource,
-        fragmentPath
+        kParticleFragmentShader,
+        "embedded particle fragment shader"
     );
     if (fragmentShader == 0) {
         glDeleteShader(vertexShader);
@@ -156,7 +147,7 @@ GLuint createParticleProgram()
 
 } // namespace
 
-Renderer::Renderer(std::size_t particleCount)
+shader::shader(std::size_t particleCount)
 {
     program_ = createParticleProgram();
     if (program_ == 0) {
@@ -205,12 +196,12 @@ Renderer::Renderer(std::size_t particleCount)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
-Renderer::~Renderer()
+shader::~shader()
 {
     shutdown();
 }
 
-void Renderer::render(
+void shader::render(
     const std::vector<Vec3>& positions,
     const glm::mat4& viewProjection
 )
@@ -251,7 +242,7 @@ void Renderer::render(
     glUseProgram(0);
 }
 
-void Renderer::shutdown()
+void shader::shutdown()
 {
     if (vbo_ != 0) {
         glDeleteBuffers(1, &vbo_);
