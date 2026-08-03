@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <glad/gl.h>
+#include <glm/mat4x4.hpp>
 
 #include "vector.h"
 
@@ -16,7 +17,8 @@ public:
     Renderer& operator=(const Renderer&) = delete;
 
     void render(
-        const std::vector<Vec3>& positions
+        const std::vector<Vec3>& positions,
+        const glm::mat4& viewProjection
     );
 
 private:
@@ -25,6 +27,7 @@ private:
     GLuint program_ = 0;
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
+    GLint viewProjectionLocation_ = -1;
 
     std::size_t particleCapacity_ = 0;
 };

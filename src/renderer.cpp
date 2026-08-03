@@ -8,6 +8,8 @@
 #include <string>
 #include <type_traits>
 
+#include <glm/gtc/type_ptr.hpp>
+
 namespace {
 
 static_assert(std::is_standard_layout_v<Vec3>,
@@ -161,6 +163,12 @@ Renderer::Renderer(std::size_t particleCount)
         throw std::runtime_error("Failed to create the particle shader program");
     }
 
+    viewProjectionLocation_ = glGetUniformLocation(program_, "uViewProjection");
+    if (viewProjectionLocation_ == -1) {
+        shutdown();
+        throw std::runtime_error("Cannot find shader uniform uViewProjection");
+    }
+
     glCreateVertexArrays(1, &vao_);
     glCreateBuffers(1, &vbo_);
 
@@ -191,6 +199,8 @@ Renderer::Renderer(std::size_t particleCount)
     glVertexArrayAttribBinding(vao_, 0, 0);
 
     glEnable(GL_PROGRAM_POINT_SIZE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
@@ -200,7 +210,10 @@ Renderer::~Renderer()
     shutdown();
 }
 
-void Renderer::render(const std::vector<Vec3>& positions)
+void Renderer::render(
+    const std::vector<Vec3>& positions,
+    const glm::mat4& viewProjection
+)
 {
     if (positions.empty()) {
         return;
@@ -221,6 +234,14 @@ void Renderer::render(const std::vector<Vec3>& positions)
         0,
         static_cast<GLsizeiptr>(positions.size() * sizeof(Vec3)),
         positions.data()
+    );
+
+    glProgramUniformMatrix4fv(
+        program_,
+        viewProjectionLocation_,
+        1,
+        GL_FALSE,
+        glm::value_ptr(viewProjection)
     );
 
     glUseProgram(program_);
@@ -247,5 +268,6 @@ void Renderer::shutdown()
         program_ = 0;
     }
 
+    viewProjectionLocation_ = -1;
     particleCapacity_ = 0;
 }
