@@ -74,9 +74,11 @@ int main() {
 
         shader shader(solver.count());
 
+        const float FIXED_DT  = 1.0f / 60.0f;
+        const int   MAX_STEPS = 5;
+        float  accumulator = 0.0f;
         double lastFrameTime = glfwGetTime();
 
-        //TODO FIXED_DT
         while (!glfwWindowShouldClose(window)) {
 
             glfwPollEvents();
@@ -86,13 +88,24 @@ int main() {
             }
 
             const double currentTime = glfwGetTime();
-            const float dt = static_cast<float>(currentTime - lastFrameTime);
+            float real_dt = static_cast<float>(currentTime - lastFrameTime);
             lastFrameTime = currentTime;
 
-            solver.step(dt);
-            auto status = solver.stats();
-            printf("fps: %f rhoAvg: %f rhoMax: %f vMax: %f momentum: %f clamped: %d cflHits: %d\n",
-                1.0 / dt, status.rhoAvg, status.rhoMax, status.vMax, status.momentum, status.clamped, status.cflHits);
+            real_dt = std::min(real_dt, 0.025f);
+
+            accumulator += real_dt;
+
+            int steps = 0;
+            while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
+                solver.step(FIXED_DT);
+                accumulator -= FIXED_DT;
+                ++steps;
+
+                auto status = solver.stats();
+                printf("fps: %f rhoAvg: %f rhoMax: %f vMax: %f  clamped: %d cflHits: %d\n",
+                    1.0 / real_dt, status.rhoAvg, status.rhoMax, status.vMax, status.clamped, status.cflHits);
+            }
+            if (steps == MAX_STEPS) accumulator = 0.0f;
 
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
