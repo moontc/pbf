@@ -116,15 +116,69 @@ private:
         for (auto& v : m_nbrs) v.reserve(m_p.maxNeighbors);
     }
 
+    void buildGrid() {
+        const int n = count();
+
+        const float pad = 2.0f * m_p.h;
+        m_gridLo = Vec3(m_p.boxLo.x - pad, m_p.boxLo.y - pad, m_p.boxLo.z - pad);
+        const Vec3 hi(m_p.boxHi.x + pad, m_p.boxHi.y + pad, m_p.boxHi.z + pad);
+
+        const float inv = 1.0f / m_p.h;
+        m_nx = std::max(1, static_cast<int>((hi.x - m_gridLo.x) * inv) + 1);
+        m_ny = std::max(1, static_cast<int>((hi.y - m_gridLo.y) * inv) + 1);
+        m_nz = std::max(1, static_cast<int>((hi.z - m_gridLo.z) * inv) + 1);
+        const int nCells = m_nx * m_ny * m_nz;
+
+        m_cellOf.resize(n);
+        m_sorted.resize(n);
+        m_cellStart.assign(nCells + 1, 0);
+
+        for (int i = 0; i < n; ++i) {
+            const int cx = std::clamp(static_cast<int>((m_xp[i].x - m_gridLo.x) * inv), 0, m_nx - 1);
+            const int cy = std::clamp(static_cast<int>((m_xp[i].y - m_gridLo.y) * inv), 0, m_ny - 1);
+            const int cz = std::clamp(static_cast<int>((m_xp[i].z - m_gridLo.z) * inv), 0, m_nz - 1);
+            m_cellOf[i] = (cz * m_ny + cy) * m_nx + cx;
+        }
+
+        for (int i = 0; i < n; ++i) ++m_cellStart[m_cellOf[i] + 1];
+
+        for (int c = 0; c < nCells; ++c) m_cellStart[c + 1] += m_cellStart[c];
+
+        m_cursor.assign(m_cellStart.begin(), m_cellStart.end() - 1);
+        for (int i = 0; i < n; ++i) m_sorted[m_cursor[m_cellOf[i]]++] = i;
+    }
+
     void findNeighbors() {
-        const int   n  = count();
+        buildGrid();
+
+        const int n = count();
         const float h2 = m_p.h * m_p.h;
+        const float inv = 1.0f / m_p.h;
+
         for (int i = 0; i < n; ++i) {
             m_nbrs[i].clear();
-            for (int j = 0; j < n; ++j) {
-                if (j == i) continue;
-                const Vec3 d = m_xp[i] - m_xp[j];
-                if (dot(d, d) < h2) m_nbrs[i].push_back(j);
+
+            const int cx = std::clamp(static_cast<int>((m_xp[i].x - m_gridLo.x) * inv), 0, m_nx - 1);
+            const int cy = std::clamp(static_cast<int>((m_xp[i].y - m_gridLo.y) * inv), 0, m_ny - 1);
+            const int cz = std::clamp(static_cast<int>((m_xp[i].z - m_gridLo.z) * inv), 0, m_nz - 1);
+
+            for (int dz = -1; dz <= 1; ++dz) {
+                const int z = cz + dz;  if (z < 0 || z >= m_nz) continue;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    const int y = cy + dy;  if (y < 0 || y >= m_ny) continue;
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int x = cx + dx;  if (x < 0 || x >= m_nx) continue;
+
+                        const int c = (z * m_ny + y) * m_nx + x;
+
+                        for (int k = m_cellStart[c]; k < m_cellStart[c + 1]; ++k) {
+                            const int j = m_sorted[k];
+                            if (j == i) continue;
+                            const Vec3 d = m_xp[i] - m_xp[j];
+                            if (dot(d, d) < h2) m_nbrs[i].push_back(j);
+                        }
+                    }
+                }
             }
         }
     }
@@ -158,7 +212,6 @@ private:
         }
     }
 
-    //
     void computeDeltaP() {
         const int n = count();
         for (int i = 0; i < n; ++i) {
@@ -257,6 +310,14 @@ private:
     std::vector<Vec3>  m_dp;       // 位置修正
     std::vector<float> m_lambda;   // 拉格朗日乘子
     std::vector<float> m_density;  // 密度
+
     std::vector<std::vector<int>> m_nbrs;
+    Vec3 m_gridLo = Vec3(0, 0, 0);
+    int  m_nx = 1, m_ny = 1, m_nz = 1;
+    std::vector<int> m_cellOf;
+    std::vector<int> m_sorted;
+    std::vector<int> m_cellStart;
+    std::vector<int> m_cursor;
+
     PbfStats m_stats;
 };
