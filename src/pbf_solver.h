@@ -32,6 +32,14 @@ struct PbfParams {
     Vec3  boxHi   = Vec3(1.0f, 1.0f, 0.5f);
 
     int   maxNeighbors = 128;     // 邻居表预留容量
+
+    float kCorr  = 0.0f;   // 0 = 关闭
+    float deltaQ = 0.3f;
+    int   nCorr  = 4;
+
+    float vorticity = 1;
+
+    float xsph = 0.05f;
 };
 
 struct PbfStats {
@@ -57,6 +65,9 @@ public:
         m_kSpiky = -45.0f / (kPi * std::pow(m_p.h, 6.0f));
 
         m_wSelf = wPoly6(0.0f);
+
+        m_wDq = wPoly6(m_p.deltaQ * m_p.h);
+        if (m_wDq <= 0.0f) m_wDq = 1.0f;
     }
 
     const PbfParams& params() const { return m_p; }
@@ -186,6 +197,7 @@ private:
 
     void computeLambda() {
         const int n = count();
+
         #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
 
@@ -216,13 +228,22 @@ private:
 
     void computeDeltaP() {
         const int n = count();
+        const bool useScorr = (m_p.kCorr > 0.0f);
+
         #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
             Vec3 dp(0, 0, 0);
             for (int j : m_nbrs[i]) {
                 const Vec3 rij = m_xp[i] - m_xp[j];
 
-                const float coef = m_lambda[i] + m_lambda[j];
+                float coef = m_lambda[i] + m_lambda[j];
+
+                if (useScorr) {
+                    float ratio = wPoly6(len(rij)) / m_wDq;
+                    float pw = 1.0f;
+                    for (int e = 0; e < m_p.nCorr; ++e) pw *= ratio;
+                    coef += -m_p.kCorr * pw;
+                }
 
                 dp += gradWSpiky(rij) * coef;
             }
@@ -246,6 +267,49 @@ private:
         }
     }
 
+    void applyVorticity(float dt) {
+        if (m_p.vorticity <= 0.0f) return;      // ★ 关闭时直接返回，别白跑
+        const int n = count();
+
+        // 公式 15
+        m_omega.assign(n, Vec3(0, 0, 0));
+        #pragma omp parallel for
+        for (int i = 0; i < n; ++i)
+            for (int j : m_nbrs[i]) {
+
+                const Vec3 g = gradWSpiky(m_x[i] - m_x[j]) * (-m_p.mass / m_density[j]);
+                m_omega[i] += cross(m_v[j] - m_v[i], g);
+            }
+
+        // eta = grad|omega| -> N -> 加力（公式 16）
+        #pragma omp parallel for
+        for (int i = 0; i < n; ++i) {
+            Vec3 eta(0, 0, 0);
+            for (int j : m_nbrs[i]) {
+                const Vec3 g = gradWSpiky(m_x[i] - m_x[j]) * (m_p.mass / m_density[j]);
+                eta += g * (len(m_omega[j]) - len(m_omega[i]));
+            }
+            const float e = len(eta);
+            if (e < 1e-9f) continue;
+            const Vec3 N = eta * (1.0f / e);
+            m_v[i] += cross(N, m_omega[i]) * (m_p.vorticity * dt);
+        }
+    }
+
+    void applyXSPH(float /*dt*/) {
+        if (m_p.xsph <= 0.0f) return;
+        const int n = count();
+
+        std::vector<Vec3> dv(n, Vec3(0, 0, 0));
+        #pragma omp parallel for
+        for (int i = 0; i < n; ++i)
+            for (int j : m_nbrs[i]) {
+                const float w = wPoly6(len(m_x[i] - m_x[j]));
+                dv[i] += (m_v[j] - m_v[i]) * (m_p.xsph * m_p.mass / m_density[j] * w);
+            }
+        for (int i = 0; i < n; ++i) m_v[i] += dv[i];
+    }
+
     void substep(float dt) {
         const int n = count();
 
@@ -258,9 +322,9 @@ private:
         findNeighbors();
 
         for (int it = 0; it < m_p.solverIters; ++it) {
-            computeLambda();                                    // 阶段 1
-            computeDeltaP();                                    // 阶段 2
-            for (int i = 0; i < n; ++i) m_xp[i] += m_dp[i];     // 阶段 3
+            computeLambda();
+            computeDeltaP();
+            for (int i = 0; i < n; ++i) m_xp[i] += m_dp[i];
             enforceBoundary();
         }
 
@@ -280,13 +344,10 @@ private:
                 ++m_stats.cflHits;
             }
 
-            // TODO 涡量约束 和  XSPH 黏性
-
             m_x[i] = m_xp[i];
 
             // 收集诊断量
             m_stats.rhoAvg   += m_density[i];
-            m_stats.rhoMax    = std::max(m_stats.rhoMax, m_density[i]);
             m_stats.vMax      = std::max(m_stats.vMax, len(m_v[i]));
             m_stats.momentum += m_v[i] * m_p.mass;
 
@@ -297,6 +358,15 @@ private:
                 ++m_stats.clamped;
         }
         if (n) m_stats.rhoAvg /= static_cast<float>(n);
+
+        applyVorticity(dt);
+        applyXSPH(dt);
+
+        for (int i = 0; i < n; ++i) {
+            float sp = len(m_v[i]);
+            if (sp > lim) { m_v[i] = m_v[i] * (lim / sp); ++m_stats.cflHits; }
+            m_stats.vMax = std::max(m_stats.vMax, len(m_v[i]));
+        }
     }
 
 
@@ -321,6 +391,10 @@ private:
     std::vector<int> m_sorted;
     std::vector<int> m_cellStart;
     std::vector<int> m_cursor;
+
+    float m_wDq = 1.0f;
+
+    std::vector<Vec3> m_omega;
 
     PbfStats m_stats;
 };

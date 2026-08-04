@@ -76,6 +76,7 @@ int main() {
 
         double lastFrameTime = glfwGetTime();
 
+        //TODO FIXED_DT
         while (!glfwWindowShouldClose(window)) {
 
             glfwPollEvents();
@@ -88,9 +89,10 @@ int main() {
             const float dt = static_cast<float>(currentTime - lastFrameTime);
             lastFrameTime = currentTime;
 
-            printf("fps: %f\n", 1.0 / dt);
-
             solver.step(dt);
+            auto status = solver.stats();
+            printf("fps: %f rhoAvg: %f rhoMax: %f vMax: %f momentum: %f clamped: %d cflHits: %d\n",
+                1.0 / dt, status.rhoAvg, status.rhoMax, status.vMax, status.momentum, status.clamped, status.cflHits);
 
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);

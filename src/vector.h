@@ -10,5 +10,12 @@ struct Vec3 {
     Vec3& operator+=(const Vec3& v) { x+=v.x; y+=v.y; z+=v.z; return *this; }
 };
 inline float dot(const Vec3& a, const Vec3& b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
+
+inline Vec3 cross(const Vec3& a, const Vec3& b) {
+    return Vec3(a.y*b.z - a.z*b.y,
+                a.z*b.x - a.x*b.z,
+                a.x*b.y - a.y*b.x);
+}
+
 inline float len(const Vec3& a) { return std::sqrt(dot(a,a)); }
 
