@@ -58,6 +58,10 @@ int main() {
         reinterpret_cast<const char*>(glGetString(GL_VERSION))
     );
 
+    std::printf("Vendor:   %s\n", reinterpret_cast<const char*>(glGetString(GL_VENDOR)));
+    std::printf("Renderer: %s\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
+    std::printf("Version:  %s\n", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+
     PbfParams params;
     PbfSolver solver(params);
     solver.initBlock({0.05f, 0.05f, 0.05f}, {0.45f, 0.90f, 0.45f});
