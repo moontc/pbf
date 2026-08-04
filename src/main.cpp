@@ -74,14 +74,23 @@ int main() {
 
         shader shader(solver.count());
 
+        double lastFrameTime = glfwGetTime();
+
         while (!glfwWindowShouldClose(window)) {
+
             glfwPollEvents();
 
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
 
-            solver.step(1.0f / 60.0f);
+            const double currentTime = glfwGetTime();
+            const float dt = static_cast<float>(currentTime - lastFrameTime);
+            lastFrameTime = currentTime;
+
+            printf("fps: %f\n", 1.0 / dt);
+
+            solver.step(dt);
 
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);

@@ -45,6 +45,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 FetchContent_MakeAvailable(glm)
 
 find_package(OpenGL REQUIRED)
+find_package(OpenMP REQUIRED COMPONENTS CXX)
 
 add_executable(pbf src/main.cpp
         src/camera.cpp
@@ -61,6 +62,7 @@ target_link_libraries(pbf PRIVATE
         glad_gl_core_46
         glm::glm
         OpenGL::GL
+        OpenMP::OpenMP_CXX
 )
 
 add_executable(test test/test.cpp)

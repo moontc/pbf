@@ -12,8 +12,8 @@ static_assert(sizeof(Vec3) == 3 * sizeof(float),
 
 struct PbfParams {
     float rho0 = 1000.0f;         // 静止密度
-    float d    = 0.025f;           // 粒子间距
-    float h    = 0.05f;           // 光滑核半径 (= 2d)
+    float d    = 0.0250f;           // 粒子间距
+    float h    = 0.050f;           // 光滑核半径 (= 2d)
     float mass = 0.01547374;     // 标定：静止规则排布时 rho_i 必须 = rho0
     float eps  = 2.92960;         // 标定：CFM 松弛，量纲 1/m^2
 
@@ -155,6 +155,7 @@ private:
         const float h2 = m_p.h * m_p.h;
         const float inv = 1.0f / m_p.h;
 
+        #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
             m_nbrs[i].clear();
 
@@ -185,6 +186,7 @@ private:
 
     void computeLambda() {
         const int n = count();
+        #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
 
             float rho = m_p.mass * m_wSelf;
@@ -214,6 +216,7 @@ private:
 
     void computeDeltaP() {
         const int n = count();
+        #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
             Vec3 dp(0, 0, 0);
             for (int j : m_nbrs[i]) {
