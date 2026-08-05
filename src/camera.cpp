@@ -46,7 +46,7 @@ void Camera::rotate(float dxPixels, float dyPixels)
 {
     yaw   += dxPixels * rotateSpeed;
     pitch += dyPixels * rotateSpeed;
-    pitch  = std::clamp(pitch, -maxPitch, maxPitch);
+    pitch  = std::clamp(pitch, 0.0f, maxPitch);
 }
 
 void Camera::zoom(float steps)
