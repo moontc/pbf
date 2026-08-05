@@ -8,13 +8,13 @@
 
 #include "vector.h"
 
-class shader final {
+class ParticleRenderer final {
 public:
-    explicit shader(std::size_t particleCount);
-    ~shader();
+    explicit ParticleRenderer(std::size_t particleCount);
+    ~ParticleRenderer();
 
-    shader(const shader&) = delete;
-    shader& operator=(const shader&) = delete;
+    ParticleRenderer(const ParticleRenderer&) = delete;
+    ParticleRenderer& operator=(const ParticleRenderer&) = delete;
 
     void render(
         const std::vector<Vec3>& positions,

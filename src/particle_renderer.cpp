@@ -1,4 +1,4 @@
-#include "shader.h"
+#include "particle_renderer.h"
 
 #include <cstdio>
 #include <stdexcept>
@@ -6,6 +6,8 @@
 #include <type_traits>
 
 #include <glm/gtc/type_ptr.hpp>
+
+#include "glsl_program.h"
 
 namespace {
 
@@ -56,98 +58,18 @@ void main()
 }
 )glsl";
 
-GLuint compileShader(
-    GLenum type,
-    const char* source,
-    const char* name
-)
-{
-    const GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &source, nullptr);
-    glCompileShader(shader);
-
-    GLint success = GL_FALSE;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (success == GL_TRUE) {
-        return shader;
-    }
-
-    GLint logLength = 0;
-    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
-
-    std::string log(
-        static_cast<std::size_t>(logLength > 0 ? logLength : 1),
-        '\0'
-    );
-    glGetShaderInfoLog(shader, logLength, nullptr, log.data());
-
-    const char* typeName = type == GL_VERTEX_SHADER
-        ? "vertex shader"
-        : "fragment shader";
-    std::fprintf(
-        stderr,
-        "Failed to compile %s '%s':\n%s\n",
-        typeName,
-        name,
-        log.c_str()
-    );
-
-    glDeleteShader(shader);
-    return 0;
-}
-
 GLuint createParticleProgram()
 {
-    const GLuint vertexShader = compileShader(
-        GL_VERTEX_SHADER,
+    return linkGlslProgram(
         kParticleVertexShader,
-        "embedded particle vertex shader"
-    );
-    if (vertexShader == 0) {
-        return 0;
-    }
-
-    const GLuint fragmentShader = compileShader(
-        GL_FRAGMENT_SHADER,
         kParticleFragmentShader,
-        "embedded particle fragment shader"
+        "embedded particle shader"
     );
-    if (fragmentShader == 0) {
-        glDeleteShader(vertexShader);
-        return 0;
-    }
-
-    const GLuint program = glCreateProgram();
-    glAttachShader(program, vertexShader);
-    glAttachShader(program, fragmentShader);
-    glLinkProgram(program);
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-
-    GLint success = GL_FALSE;
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
-    if (success == GL_TRUE) {
-        return program;
-    }
-
-    GLint logLength = 0;
-    glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
-
-    std::string log(
-        static_cast<std::size_t>(logLength > 0 ? logLength : 1),
-        '\0'
-    );
-    glGetProgramInfoLog(program, logLength, nullptr, log.data());
-    std::fprintf(stderr, "Failed to link particle program:\n%s\n", log.c_str());
-
-    glDeleteProgram(program);
-    return 0;
 }
 
 } // namespace
 
-shader::shader(std::size_t particleCount)
+ParticleRenderer::ParticleRenderer(std::size_t particleCount)
 {
     program_ = createParticleProgram();
     if (program_ == 0) {
@@ -188,20 +110,14 @@ shader::shader(std::size_t particleCount)
     glEnableVertexArrayAttrib(vao_, 0);
     glVertexArrayAttribFormat(vao_, 0, 3, GL_FLOAT, GL_FALSE, 0);
     glVertexArrayAttribBinding(vao_, 0, 0);
-
-    glEnable(GL_PROGRAM_POINT_SIZE);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
-shader::~shader()
+ParticleRenderer::~ParticleRenderer()
 {
     shutdown();
 }
 
-void shader::render(
+void ParticleRenderer::render(
     const std::vector<Vec3>& positions,
     const glm::mat4& viewProjection
 )
@@ -242,7 +158,7 @@ void shader::render(
     glUseProgram(0);
 }
 
-void shader::shutdown()
+void ParticleRenderer::shutdown()
 {
     if (vbo_ != 0) {
         glDeleteBuffers(1, &vbo_);

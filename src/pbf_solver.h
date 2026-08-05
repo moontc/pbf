@@ -348,6 +348,7 @@ private:
 
             // 收集诊断量
             m_stats.rhoAvg   += m_density[i];
+            m_stats.rhoMax    = std::max(m_stats.rhoMax, m_density[i]);
             m_stats.vMax      = std::max(m_stats.vMax, len(m_v[i]));
             m_stats.momentum += m_v[i] * m_p.mass;
 
