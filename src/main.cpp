@@ -11,7 +11,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "camera.h"
-#include "shader.h"
+#include "particle_renderer.h"
+#include "floor.h"
 #include "vector.h"
 #include "pbf_solver.h"
 
@@ -62,6 +63,12 @@ int main() {
     std::printf("Renderer: %s\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
     std::printf("Version:  %s\n", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
 
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_PROGRAM_POINT_SIZE);
+
     PbfParams params;
     PbfSolver solver(params);
     solver.initBlock({0.05f, 0.05f, 0.05f}, {0.45f, 0.90f, 0.45f});
@@ -72,7 +79,8 @@ int main() {
         Camera camera({0.5, 0.5, 0.25}, 3.0f);
         camera.attach(window);
 
-        shader shader(solver.count());
+        ParticleRenderer particles(solver.count());
+        Floor floor(params.boxLo, params.boxHi);
 
         const float FIXED_DT  = 1.0f / 60.0f;
         const int   MAX_STEPS = 5;
@@ -116,7 +124,8 @@ int main() {
 
             const glm::mat4 viewProjection = camera.projection() * camera.view();
 
-            shader.render(solver.positions(), viewProjection);
+            floor.render(viewProjection);
+            particles.render(solver.positions(), viewProjection);
 
             glfwSwapBuffers(window);
         }

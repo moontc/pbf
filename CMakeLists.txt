@@ -51,8 +51,11 @@ add_executable(pbf src/main.cpp
         src/camera.cpp
         src/camera.h
         src/vector.h
-        src/Shader.cpp
-        src/Shader.h
+        src/particle_renderer.cpp
+        src/particle_renderer.h
+        src/glsl_program.h
+        src/floor.cpp
+        src/floor.h
         src/pbf_solver.h)
 
 target_include_directories(pbf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
