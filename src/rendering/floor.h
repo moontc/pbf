@@ -3,7 +3,7 @@
 #include <glad/gl.h>
 #include <glm/mat4x4.hpp>
 
-#include "vector.h"
+#include "../vector.h"
 
 class Floor final {
 public:

@@ -5,17 +5,17 @@
 #include <random>
 #include <vector>
 
-#include "vector.h"
+#include "../vector.h"
 
 static_assert(sizeof(Vec3) == 3 * sizeof(float),
               "Vec3 must be tightly packed for direct GPU upload");
 
 struct PbfParams {
     float rho0 = 1000.0f;         // 静止密度
-    float d    = 0.0250f;           // 粒子间距
-    float h    = 0.050f;           // 光滑核半径 (= 2d)
-    float mass = 0.01547374;     // 标定：静止规则排布时 rho_i 必须 = rho0
-    float eps  = 2.92960;         // 标定：CFM 松弛，量纲 1/m^2
+    float d    = 0.015f;           // 粒子间距
+    float h    = 0.030f;           // 光滑核半径 (= 2d)
+    float mass = 0.00334233;     // 标定：静止规则排布时 rho_i 必须 = rho0
+    float eps  = 8.13778;         // 标定：CFM 松弛，量纲 1/m^2
 
     // --- 求解器 ---
     int   substeps    = 4;        // 论文 Table 1: Dam Break = 4

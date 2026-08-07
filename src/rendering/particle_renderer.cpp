@@ -22,13 +22,14 @@ constexpr char kParticleVertexShader[] =
 
 layout(location = 0) in vec3 aPosition;
 
-uniform mat4 uViewProjection;
+uniform mat4 uView;
+uniform mat4 uProjection;
 
 out float vDepth;
 
 void main()
 {
-    gl_Position = uViewProjection * vec4(aPosition, 1.0);
+    gl_Position = uProjection * uView * vec4(aPosition, 1.0);
     gl_PointSize = 4.0;
 
     vDepth = clamp(aPosition.y, 0.0, 1.0);
@@ -53,7 +54,7 @@ void main()
         discard;
     }
 
-    vec3 color = vec3(0.05, 0.35 + 0.55 * vDepth, 1.0);
+    vec3 color = vec3(0.05, 0.35 + 0.65 * vDepth, 1.0);
     fragColor = vec4(color, alpha);
 }
 )glsl";
@@ -76,10 +77,11 @@ ParticleRenderer::ParticleRenderer(std::size_t particleCount)
         throw std::runtime_error("Failed to create the particle shader program");
     }
 
-    viewProjectionLocation_ = glGetUniformLocation(program_, "uViewProjection");
-    if (viewProjectionLocation_ == -1) {
+    viewLocation_ = glGetUniformLocation(program_, "uView");
+    projectionLocation_ = glGetUniformLocation(program_, "uProjection");
+    if (viewLocation_ == -1 || projectionLocation_ == -1) {
         shutdown();
-        throw std::runtime_error("Cannot find shader uniform uViewProjection");
+        throw std::runtime_error("Cannot find shader uniform uView or uProjection");
     }
 
     glCreateVertexArrays(1, &vao_);
@@ -119,7 +121,8 @@ ParticleRenderer::~ParticleRenderer()
 
 void ParticleRenderer::render(
     const std::vector<Vec3>& positions,
-    const glm::mat4& viewProjection
+    const glm::mat4& view,
+    const glm::mat4& projection
 )
 {
     if (positions.empty()) {
@@ -145,10 +148,18 @@ void ParticleRenderer::render(
 
     glProgramUniformMatrix4fv(
         program_,
-        viewProjectionLocation_,
+        viewLocation_,
         1,
         GL_FALSE,
-        glm::value_ptr(viewProjection)
+        glm::value_ptr(view)
+    );
+
+    glProgramUniformMatrix4fv(
+        program_,
+        projectionLocation_,
+        1,
+        GL_FALSE,
+        glm::value_ptr(projection)
     );
 
     glUseProgram(program_);
@@ -175,6 +186,7 @@ void ParticleRenderer::shutdown()
         program_ = 0;
     }
 
-    viewProjectionLocation_ = -1;
+    viewLocation_ = -1;
+    projectionLocation_ = -1;
     particleCapacity_ = 0;
 }

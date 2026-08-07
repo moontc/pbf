@@ -14,13 +14,14 @@
 
 #include <cuda_runtime.h>
 
-#include "camera.h"
-#include "particle_renderer.h"
-#include "floor.h"
+#include "rendering/camera.h"
+#include "rendering/particle_renderer.h"
+#include "rendering/floor.h"
 #include "frame_profiler.h"
 #include "vector.h"
-#include "pbf_solver.h"
-#include "cuda_pbf_solver.cuh"
+#include "solvers/pbf_solver.h"
+#include "solvers/cuda_pbf_solver.cuh"
+#include "rendering/fluid_renderer.h"
 
 int main() {
     if (!glfwInit()) {
@@ -138,6 +139,7 @@ int main() {
         camera.attach(window);
 
         ParticleRenderer particles(solver.count());
+        FluidRenderer fluid(solver.count());
         Floor floor(params.boxLo, params.boxHi);
 
         const float FIXED_DT  = 1.0f / 60.0f;
@@ -182,10 +184,12 @@ int main() {
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            const glm::mat4 viewProjection = camera.projection() * camera.view();
+            int fbW, fbH;
+            glfwGetFramebufferSize(window, &fbW, &fbH);
 
-            floor.render(viewProjection);
-            particles.render(solver.positions(), viewProjection);
+            floor.render(camera.projection() * camera.view());
+            //particles.render(solver.positions(), camera.view(), camera.projection());
+            fluid.render(solver.positions(), camera.view(), camera.projection(), solver.params().d * 0.65f, static_cast<float>(fbH));
 
             profiler.afterRender();
 

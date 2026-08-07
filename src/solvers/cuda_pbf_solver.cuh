@@ -2,8 +2,8 @@
 
 #include <vector>
 
-#include "pbf_solver.h"   // PbfParams, PbfStats
-#include "vector.h"
+#include "pbf_solver.h"
+#include "../vector.h"
 
 class CudaPbfSolver final {
 public:

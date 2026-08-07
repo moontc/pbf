@@ -6,7 +6,7 @@
 #include <glad/gl.h>
 #include <glm/mat4x4.hpp>
 
-#include "vector.h"
+#include "../vector.h"
 
 class ParticleRenderer final {
 public:
@@ -18,7 +18,8 @@ public:
 
     void render(
         const std::vector<Vec3>& positions,
-        const glm::mat4& viewProjection
+        const glm::mat4& view,
+        const glm::mat4& projection
     );
 
 private:
@@ -27,7 +28,8 @@ private:
     GLuint program_ = 0;
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
-    GLint viewProjectionLocation_ = -1;
+    GLint viewLocation_ = -1;
+    GLint projectionLocation_ = -1;
 
     std::size_t particleCapacity_ = 0;
 };

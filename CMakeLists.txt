@@ -55,9 +55,9 @@ find_package(OpenMP REQUIRED COMPONENTS CXX)
 # The solvers, as a library, so that both the application and the validation
 # executable share one compilation of the ~40 s CUDA translation unit.
 add_library(pbf_solver STATIC
-        src/cuda_pbf_solver.cu
-        src/cuda_pbf_solver.cuh
-        src/pbf_solver.h
+        src/solvers/cuda_pbf_solver.cu
+        src/solvers/cuda_pbf_solver.cuh
+        src/solvers/pbf_solver.h
         src/vector.h)
 
 target_include_directories(pbf_solver PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -85,14 +85,16 @@ target_compile_options(pbf_solver PRIVATE
 
 # ---------------------------------------------------------------- the app ---
 add_executable(pbf src/main.cpp
-        src/camera.cpp
-        src/camera.h
-        src/particle_renderer.cpp
-        src/particle_renderer.h
-        src/glsl_program.h
-        src/floor.cpp
-        src/floor.h
-        src/frame_profiler.h)
+        src/rendering/camera.cpp
+        src/rendering/camera.h
+        src/rendering/particle_renderer.cpp
+        src/rendering/particle_renderer.h
+        src/rendering/glsl_program.h
+        src/rendering/floor.cpp
+        src/rendering/floor.h
+        src/frame_profiler.h
+        src/rendering/fluid_renderer.cpp
+        src/rendering/fluid_renderer.h)
 
 target_link_libraries(pbf PRIVATE
         pbf_solver
