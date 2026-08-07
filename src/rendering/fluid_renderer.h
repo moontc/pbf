@@ -21,11 +21,15 @@ public:
         const glm::mat4& view,
         const glm::mat4& projection,
         float radius,
-        float viewportHeight
+        int viewportWidth,
+        int viewportHeight
     );
 
 private:
     void shutdown();
+
+    // 尺寸变化时重建离屏目标
+    void ensureTarget(int width, int height);
 
     GLuint program_ = 0;
     GLuint vao_ = 0;
@@ -34,6 +38,13 @@ private:
     GLint projectionLocation_ = -1;
     GLint radiusLocation_ = -1;
     GLint viewportHLocation_ = -1;
+
+    // 深度场：到流体表面的眼空间距离，没有流体的地方是 0。
+    GLuint fbo_ = 0;
+    GLuint depthField_ = 0;
+    GLuint depthBuffer_ = 0;
+    int    targetWidth_ = 0;
+    int    targetHeight_ = 0;
 
     std::size_t particleCapacity_ = 0;
 };
