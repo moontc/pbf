@@ -102,6 +102,8 @@ public:
     const std::vector<float>& densities()  const { return m_density; }
     const PbfStats& stats() const { return m_stats; }
 
+    const std::vector<std::vector<int>>& neighbors() const { return m_nbrs; }
+
     float wPoly6(float r) const {
         if (r < 0.0f || r >= m_p.h) return 0.0f;
         const float t = m_p.h * m_p.h - r * r;
@@ -302,11 +304,15 @@ private:
 
         std::vector<Vec3> dv(n, Vec3(0, 0, 0));
         #pragma omp parallel for
-        for (int i = 0; i < n; ++i)
+        for (int i = 0; i < n; ++i) {
+            const float rhoI = m_density[i];
             for (int j : m_nbrs[i]) {
                 const float w = wPoly6(len(m_x[i] - m_x[j]));
-                dv[i] += (m_v[j] - m_v[i]) * (m_p.xsph * m_p.mass / m_density[j] * w);
+
+                const float wt = 2.0f * m_p.mass / (rhoI + m_density[j]);
+                dv[i] += (m_v[j] - m_v[i]) * (m_p.xsph * wt * w);
             }
+        }
         for (int i = 0; i < n; ++i) m_v[i] += dv[i];
     }
 

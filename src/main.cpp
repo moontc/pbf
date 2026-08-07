@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <exception>
+
+#include <type_traits>
 #include <vector>
 #include <string>
 
@@ -10,11 +12,15 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cuda_runtime.h>
+
 #include "camera.h"
 #include "particle_renderer.h"
 #include "floor.h"
+#include "frame_profiler.h"
 #include "vector.h"
 #include "pbf_solver.h"
+#include "cuda_pbf_solver.cuh"
 
 int main() {
     if (!glfwInit()) {
@@ -41,6 +47,7 @@ int main() {
     if (!window) {
         std::fprintf(stderr, "fail to creat window\n");
         glfwTerminate();
+
         return 1;
     }
 
@@ -63,15 +70,66 @@ int main() {
     std::printf("Renderer: %s\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
     std::printf("Version:  %s\n", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
 
+    int device = 0;
+    cudaError_t error = cudaGetDevice(&device);
+
+    if (error != cudaSuccess) {
+        std::fprintf(
+            stderr,
+            "cudaGetDevice failed: %s\n",
+            cudaGetErrorString(error)
+        );
+        return 1;
+    }
+
+    cudaDeviceProp properties{};
+    error = cudaGetDeviceProperties(&properties, device);
+
+    if (error != cudaSuccess) {
+        std::fprintf(
+            stderr,
+            "cudaGetDeviceProperties failed: %s\n",
+            cudaGetErrorString(error)
+        );
+        return 1;
+    }
+
+    std::printf("CUDA device: %d\n", device);
+    std::printf("CUDA GPU:    %s\n", properties.name);
+    std::printf(
+        "Compute capability: %d.%d\n",
+        properties.major,
+        properties.minor
+    );
+    std::printf(
+        "Global memory: %.2f GB\n",
+        static_cast<double>(properties.totalGlobalMem)
+            / (1024.0 * 1024.0 * 1024.0)
+    );
+    std::printf(
+        "SM count: %d\n",
+        properties.multiProcessorCount
+    );
+
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_PROGRAM_POINT_SIZE);
 
+    constexpr bool kProfileFrames = true;
+
+
+
+    const Vec3 blockLo(0.05f, 0.05f, 0.05f);
+    const Vec3 blockHi(0.45f, 0.90f, 0.45f);
+
     PbfParams params;
-    PbfSolver solver(params);
-    solver.initBlock({0.05f, 0.05f, 0.05f}, {0.45f, 0.90f, 0.45f});
+
+    //PbfSolver solver(params);
+    CudaPbfSolver solver(params);
+
+    solver.initBlock(blockLo, blockHi);
 
     int result = 0;
 
@@ -86,6 +144,8 @@ int main() {
         const int   MAX_STEPS = 5;
         float  accumulator = 0.0f;
         double lastFrameTime = glfwGetTime();
+
+        FrameProfiler profiler(kProfileFrames);
 
         while (!glfwWindowShouldClose(window)) {
 
@@ -103,17 +163,17 @@ int main() {
 
             accumulator += real_dt;
 
+            profiler.frameStart();
+
             int steps = 0;
             while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
                 solver.step(FIXED_DT);
                 accumulator -= FIXED_DT;
                 ++steps;
-
-                auto status = solver.stats();
-                printf("fps: %f rhoAvg: %f rhoMax: %f vMax: %f  clamped: %d cflHits: %d\n",
-                    1.0 / real_dt, status.rhoAvg, status.rhoMax, status.vMax, status.clamped, status.cflHits);
             }
             if (steps == MAX_STEPS) accumulator = 0.0f;
+
+            profiler.afterSolve(steps);
 
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
@@ -127,7 +187,11 @@ int main() {
             floor.render(viewProjection);
             particles.render(solver.positions(), viewProjection);
 
+            profiler.afterRender();
+
             glfwSwapBuffers(window);
+
+            profiler.afterSwap(solver.count());
         }
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s\n", error.what());
