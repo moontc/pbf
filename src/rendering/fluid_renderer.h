@@ -39,12 +39,17 @@ private:
     GLint radiusLocation_ = -1;
     GLint viewportHLocation_ = -1;
 
-    // 深度场：到流体表面的眼空间距离，没有流体的地方是 0。
+    // pass 1 深度场：到流体表面的眼空间距离，没有流体的地方是 0。
     GLuint fbo_ = 0;
     GLuint depthField_ = 0;
     GLuint depthBuffer_ = 0;
     int    targetWidth_ = 0;
     int    targetHeight_ = 0;
+
+    // pass 3
+    GLuint surfaceProgram_ = 0;
+    GLuint emptyVao_ = 0;
+    GLint  surfaceProjXYLocation_ = -1;
 
     std::size_t particleCapacity_ = 0;
 };
