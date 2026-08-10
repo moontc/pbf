@@ -665,7 +665,9 @@ void CudaPbfSolver::substep(float dt, bool wantStats)
         CUDA_CHECK_LAUNCH();
     }
 
-    CUDA_CHECK(cudaMemset(d_stats, 0, sizeof(GpuStats)));
+    if (wantStats) {
+        CUDA_CHECK(cudaMemset(d_stats, 0, sizeof(GpuStats)));
+    }
 
     kVelocityCommit<<<blocks, kBlock>>>(d_x, d_v, d_xp, d_density,
                                         static_cast<GpuStats*>(d_stats), gp, dt);
@@ -701,19 +703,23 @@ void CudaPbfSolver::step(float dtFrame)
     const float dt = dtFrame / static_cast<float>(m_p.substeps);
 
     for (int s = 0; s < m_p.substeps; ++s) {
-        substep(dt, s == m_p.substeps - 1);
+        substep(dt, m_debug && s == m_p.substeps - 1);
     }
 
-    GpuStats gs{};
-    CUDA_CHECK(cudaMemcpy(&gs, d_stats, sizeof(GpuStats), cudaMemcpyDeviceToHost));
+    if (m_debug) {
+        GpuStats gs{};
+        CUDA_CHECK(cudaMemcpy(&gs, d_stats, sizeof(GpuStats), cudaMemcpyDeviceToHost));
 
-    m_stats = PbfStats();
-    m_stats.rhoAvg   = m_n ? gs.rhoSum / static_cast<float>(m_n) : 0.0f;
-    m_stats.rhoMax   = gs.rhoMax;
-    m_stats.vMax     = gs.vMax;
-    m_stats.momentum = Vec3(gs.momX, gs.momY, gs.momZ);
-    m_stats.clamped  = gs.clamped;
-    m_stats.cflHits  = gs.cflHits;
+        m_stats = PbfStats();
+        m_stats.rhoAvg   = m_n ? gs.rhoSum / static_cast<float>(m_n) : 0.0f;
+        m_stats.rhoMax   = gs.rhoMax;
+        m_stats.vMax     = gs.vMax;
+        m_stats.momentum = Vec3(gs.momX, gs.momY, gs.momZ);
+        m_stats.clamped  = gs.clamped;
+        m_stats.cflHits  = gs.cflHits;
+    } else {
+        m_stats = PbfStats();
+    }
 
     const int blocks = gridFor(m_n);
     kScatterVec3ById<<<blocks, kBlock>>>(d_x, d_id, d_xTmp, m_n);

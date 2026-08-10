@@ -15,6 +15,7 @@ public:
 
     void initBlock(const Vec3& lo, const Vec3& hi, unsigned seed = 12345);
 
+    void debug(bool enabled = true) noexcept { m_debug = enabled; }
     void step(float dtFrame);
 
     int count() const { return m_n; }
@@ -43,6 +44,7 @@ private:
 
     PbfParams m_p;
     int m_n = 0;
+    bool m_debug = false;
 
     // Kernel constants, derived from m_p once in the constructor.
     float m_kPoly6 = 0.0f;
