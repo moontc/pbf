@@ -4,6 +4,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
@@ -116,9 +117,48 @@ __global__ void kScatter(const int* cellOf, int* cursor, int* sorted, GpuParams 
     sorted[atomicAdd(&cursor[cellOf[i]], 1)] = i;
 }
 
+__global__ void kInitIds(int* id, int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) id[i] = i;
+}
+
+// Apply the counting-sort permutation to the persistent particle state.  The
+// output slot is the particle's position in cell order; id preserves the public
+// API's original particle order for downloads and validation.
+__global__ void kReorderState(const int* sorted,
+                              const Vec3* xIn,
+                              const Vec3* vIn,
+                              const Vec3* xpIn,
+                              const int* idIn,
+                              Vec3* xOut,
+                              Vec3* vOut,
+                              Vec3* xpOut,
+                              int* idOut,
+                              int n)
+{
+    const int slot = blockIdx.x * blockDim.x + threadIdx.x;
+    if (slot >= n) return;
+
+    const int old = sorted[slot];
+    xOut[slot]  = xIn[old];
+    vOut[slot]  = vIn[old];
+    xpOut[slot] = xpIn[old];
+    idOut[slot] = idIn[old];
+}
+
+__global__ void kScatterVec3ById(const Vec3* sortedValues,
+                                 const int* id,
+                                 Vec3* originalOrder,
+                                 int n)
+{
+    const int slot = blockIdx.x * blockDim.x + threadIdx.x;
+    if (slot >= n) return;
+    originalOrder[id[slot]] = sortedValues[slot];
+}
+
 __global__ void kFindNeighbors(const Vec3* xp,
                                const int* cellStart,
-                               const int* sorted,
                                int* nbr,
                                int* nbrCount,
                                int* overflow,
@@ -146,8 +186,9 @@ __global__ void kFindNeighbors(const Vec3* xp,
 
                 const int c = (z * p.ny + y) * p.nx + x;
 
-                for (int k = cellStart[c]; k < cellStart[c + 1]; ++k) {
-                    const int j = sorted[k];
+                // Particle storage has already been permuted into cell order,
+                // so the prefix-sum interval is also the particle-index range.
+                for (int j = cellStart[c]; j < cellStart[c + 1]; ++j) {
                     if (j == i) continue;
                     const Vec3 rij = xi - xp[j];
                     if (dot(rij, rij) < h2) {
@@ -451,16 +492,20 @@ CudaPbfSolver::~CudaPbfSolver()
 void CudaPbfSolver::release()
 {
     cudaFree(d_x);        cudaFree(d_v);         cudaFree(d_xp);
+    cudaFree(d_xTmp);     cudaFree(d_vTmp);      cudaFree(d_xpTmp);
     cudaFree(d_dp);       cudaFree(d_omega);     cudaFree(d_dv);
     cudaFree(d_lambda);   cudaFree(d_density);
     cudaFree(d_cellOf);   cudaFree(d_cellCount); cudaFree(d_cellStart);
-    cudaFree(d_cursor);   cudaFree(d_sorted);
+    cudaFree(d_cursor);   cudaFree(d_sorted);    cudaFree(d_id);
+    cudaFree(d_idTmp);
     cudaFree(d_nbr);      cudaFree(d_nbrCount);  cudaFree(d_overflow);
     cudaFree(d_scanTemp); cudaFree(d_stats);
 
     d_x = d_v = d_xp = d_dp = d_omega = d_dv = nullptr;
+    d_xTmp = d_vTmp = d_xpTmp = nullptr;
     d_lambda = d_density = nullptr;
     d_cellOf = d_cellCount = d_cellStart = d_cursor = d_sorted = nullptr;
+    d_id = d_idTmp = nullptr;
     d_nbr = d_nbrCount = d_overflow = nullptr;
     d_scanTemp = d_stats = nullptr;
 }
@@ -498,6 +543,9 @@ void CudaPbfSolver::allocate()
     CUDA_CHECK(cudaMalloc(&d_x,       sizeof(Vec3) * n));
     CUDA_CHECK(cudaMalloc(&d_v,       sizeof(Vec3) * n));
     CUDA_CHECK(cudaMalloc(&d_xp,      sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&d_xTmp,    sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&d_vTmp,    sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&d_xpTmp,   sizeof(Vec3) * n));
     CUDA_CHECK(cudaMalloc(&d_dp,      sizeof(Vec3) * n));
     CUDA_CHECK(cudaMalloc(&d_omega,   sizeof(Vec3) * n));
     CUDA_CHECK(cudaMalloc(&d_dv,      sizeof(Vec3) * n));
@@ -509,6 +557,8 @@ void CudaPbfSolver::allocate()
     CUDA_CHECK(cudaMalloc(&d_cellStart, sizeof(int) * (nc + 1)));
     CUDA_CHECK(cudaMalloc(&d_cursor,    sizeof(int) * nc));
     CUDA_CHECK(cudaMalloc(&d_sorted,    sizeof(int) * n));
+    CUDA_CHECK(cudaMalloc(&d_id,        sizeof(int) * n));
+    CUDA_CHECK(cudaMalloc(&d_idTmp,     sizeof(int) * n));
 
     CUDA_CHECK(cudaMalloc(&d_nbr,      sizeof(int) * n * m_p.maxNeighbors));
     CUDA_CHECK(cudaMalloc(&d_nbrCount, sizeof(int) * n));
@@ -518,6 +568,9 @@ void CudaPbfSolver::allocate()
 
     CUDA_CHECK(cudaMemset(d_v, 0, sizeof(Vec3) * n));
     CUDA_CHECK(cudaMemset(d_overflow, 0, sizeof(int)));
+
+    kInitIds<<<gridFor(m_n), kBlock>>>(d_id, m_n);
+    CUDA_CHECK_LAUNCH();
 
     size_t bytes = 0;
     cub::DeviceScan::InclusiveSum(nullptr, bytes,
@@ -571,7 +624,18 @@ void CudaPbfSolver::findNeighbors()
     kScatter<<<blocks, kBlock>>>(d_cellOf, d_cursor, d_sorted, gp);
     CUDA_CHECK_LAUNCH();
 
-    kFindNeighbors<<<blocks, kBlock>>>(d_xp, d_cellStart, d_sorted,
+    kReorderState<<<blocks, kBlock>>>(d_sorted,
+                                      d_x, d_v, d_xp, d_id,
+                                      d_xTmp, d_vTmp, d_xpTmp, d_idTmp,
+                                      m_n);
+    CUDA_CHECK_LAUNCH();
+
+    std::swap(d_x, d_xTmp);
+    std::swap(d_v, d_vTmp);
+    std::swap(d_xp, d_xpTmp);
+    std::swap(d_id, d_idTmp);
+
+    kFindNeighbors<<<blocks, kBlock>>>(d_xp, d_cellStart,
                                        d_nbr, d_nbrCount, d_overflow, gp);
     CUDA_CHECK_LAUNCH();
 }
@@ -651,39 +715,59 @@ void CudaPbfSolver::step(float dtFrame)
     m_stats.clamped  = gs.clamped;
     m_stats.cflHits  = gs.cflHits;
 
-    CUDA_CHECK(cudaMemcpy(m_hostX.data(), d_x,
+    const int blocks = gridFor(m_n);
+    kScatterVec3ById<<<blocks, kBlock>>>(d_x, d_id, d_xTmp, m_n);
+    CUDA_CHECK_LAUNCH();
+
+    CUDA_CHECK(cudaMemcpy(m_hostX.data(), d_xTmp,
                           sizeof(Vec3) * m_n, cudaMemcpyDeviceToHost));
 }
 
 void CudaPbfSolver::downloadVelocities(std::vector<Vec3>& out) const
 {
     out.resize(m_n);
-    CUDA_CHECK(cudaMemcpy(out.data(), d_v, sizeof(Vec3) * m_n,
+    kScatterVec3ById<<<gridFor(m_n), kBlock>>>(d_v, d_id, d_vTmp, m_n);
+    CUDA_CHECK_LAUNCH();
+    CUDA_CHECK(cudaMemcpy(out.data(), d_vTmp, sizeof(Vec3) * m_n,
                           cudaMemcpyDeviceToHost));
 }
 
 void CudaPbfSolver::downloadDensities(std::vector<float>& out) const
 {
-    out.resize(m_n);
-    CUDA_CHECK(cudaMemcpy(out.data(), d_density, sizeof(float) * m_n,
+    std::vector<float> sortedDensity(m_n);
+    std::vector<int> ids(m_n);
+
+    CUDA_CHECK(cudaMemcpy(sortedDensity.data(), d_density, sizeof(float) * m_n,
                           cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(ids.data(), d_id, sizeof(int) * m_n,
+                          cudaMemcpyDeviceToHost));
+
+    out.resize(m_n);
+    for (int slot = 0; slot < m_n; ++slot) {
+        out[ids[slot]] = sortedDensity[slot];
+    }
 }
 
 void CudaPbfSolver::downloadNeighbors(std::vector<std::vector<int>>& out) const
 {
     std::vector<int> flat(static_cast<size_t>(m_n) * m_p.maxNeighbors);
     std::vector<int> counts(m_n);
+    std::vector<int> ids(m_n);
 
     CUDA_CHECK(cudaMemcpy(flat.data(), d_nbr,
                           sizeof(int) * flat.size(), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(counts.data(), d_nbrCount,
                           sizeof(int) * m_n, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(ids.data(), d_id,
+                          sizeof(int) * m_n, cudaMemcpyDeviceToHost));
 
     out.assign(m_n, {});
-    for (int i = 0; i < m_n; ++i) {
-        out[i].resize(counts[i]);
-        for (int k = 0; k < counts[i]; ++k) {
-            out[i][k] = flat[static_cast<size_t>(k) * m_n + i];   // un-transpose
+    for (int slot = 0; slot < m_n; ++slot) {
+        const int originalId = ids[slot];
+        out[originalId].resize(counts[slot]);
+        for (int k = 0; k < counts[slot]; ++k) {
+            const int neighborSlot = flat[static_cast<size_t>(k) * m_n + slot];
+            out[originalId][k] = ids[neighborSlot];
         }
     }
 }

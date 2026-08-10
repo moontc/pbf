@@ -380,9 +380,9 @@ private:
     static constexpr float kPi = 3.14159265358979323846f;
 
     PbfParams m_p;
-    float m_kPoly6 = 0.0f;   // Poly6 归一化系数
-    float m_kSpiky = 0.0f;   // Spiky 梯度系数
-    float m_wSelf  = 0.0f;   // W(0,h)，密度的自身项
+    float m_kPoly6 = 0.0f;          // Poly6 归一化系数
+    float m_kSpiky = 0.0f;          // Spiky 梯度系数
+    float m_wSelf  = 0.0f;          // W(0,h)，密度的自身项
 
     std::vector<Vec3>  m_x;        // 位置（帧开始时）
     std::vector<Vec3>  m_v;        // 速度

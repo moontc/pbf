@@ -57,6 +57,9 @@ private:
     Vec3*  d_x         = nullptr;
     Vec3*  d_v         = nullptr;
     Vec3*  d_xp        = nullptr;
+    Vec3*  d_xTmp      = nullptr;
+    Vec3*  d_vTmp      = nullptr;
+    Vec3*  d_xpTmp     = nullptr;
     Vec3*  d_dp        = nullptr;
     Vec3*  d_omega     = nullptr;
     Vec3*  d_dv        = nullptr;   // XSPH scratch
@@ -68,6 +71,8 @@ private:
     int*   d_cellStart = nullptr;   // nCells+1, prefix sums
     int*   d_cursor    = nullptr;   // nCells,   scatter write heads
     int*   d_sorted    = nullptr;
+    int*   d_id        = nullptr;   // current slot -> original particle id
+    int*   d_idTmp     = nullptr;
 
     int*   d_nbr       = nullptr;
     int*   d_nbrCount  = nullptr;
