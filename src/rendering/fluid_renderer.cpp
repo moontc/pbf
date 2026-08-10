@@ -70,7 +70,69 @@ void main() {
 )glsl";
 // ----------------------------------------------------------
 
-// -------------------------- pass 3 ------------------------
+// -------------------------- pass 2/3 ------------------------
+// 深度平滑：窄范围滤波 (narrow-range filter, Truong & Yuksel 2018)
+constexpr char kBlurFragmentShader[] =
+    // language=GLSL
+        R"glsl(#version 460 core
+
+uniform sampler2D uSource;
+uniform vec2      uDirection;     // 一个 texel 的步长：(1/w,0) 或 (0,1/h)
+uniform float     uRadiusScale;   // 粒子在 z=1m 处的像素半径
+uniform float     uBlurScale;     // 滤波半径 = 几倍粒子半径
+uniform float     uNarrowRange;   // 深度窗口，米
+
+layout(location = 0) out float fragDistance;
+
+// 循环上界必须是编译期常量，实际半径靠 break 截断
+const int kMaxRadius = 32;
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / vec2(textureSize(uSource, 0));
+
+    float z0 = texture(uSource, uv).r;
+    if (z0 <= 0.0) {
+        fragDistance = 0.0;
+        return;
+    }
+
+    // R = uBlurScale · uRadiusScale / z,   uRadiusScale = viewportH·proj[1][1]·r / 2
+    int R = int(min(uBlurScale * uRadiusScale / z0, float(kMaxRadius)));
+    if (R < 1) {
+        fragDistance = z0;
+        return;
+    }
+
+    // 高斯权重  w(i) = exp(-i² / (2σ²))，取 σ = R/2。
+    // 最外圈 i=R 处 w = exp(-R²/(2·(R/2)²)) = exp(-2) ≈ 0.135，截断不可见。
+    float sigma  = float(R) * 0.5;
+    float inv2s2 = 1.0 / (2.0 * sigma * sigma);
+
+    float sum     = z0;      // i=0 的中心样本，w(0) = exp(0) = 1
+    float weights = 1.0;
+
+    for (int i = 1; i <= kMaxRadius; ++i) {
+        if (i > R) break;
+
+        float w = exp(-float(i * i) * inv2s2);
+
+        for (int side = -1; side <= 1; side += 2) {   // 对称的两侧
+            float zi = texture(uSource, uv + uDirection * float(i * side)).r;
+
+            if (zi <= 0.0) continue;
+            if (zi < z0 - uNarrowRange) continue;
+
+            sum     += w * min(zi, z0 + uNarrowRange);
+            weights += w;
+        }
+    }
+
+    fragDistance = sum / weights;
+}
+)glsl";
+// ----------------------------------------------------------
+
+// -------------------------- pass 4 ------------------------
 constexpr char kFullscreenVertexShader[] =
     // language=GLSL
         R"glsl(#version 460 core
@@ -134,7 +196,7 @@ void main() {
 
     vec3  L    = normalize(vec3(0.5, 0.8, 0.6));
     float diff = max(dot(n, L), 0.0);
-    FragColor  = vec4(vec3(0.35, 0.65, 0.95) * (0.25 + 0.75 * diff), 1.0);
+    FragColor  = vec4(vec3(0.35, 0.65, 0.85) * (0.25 + 0.75 * diff), 1.0);
 }
 )glsl";
 
@@ -142,26 +204,47 @@ void main() {
 
 FluidRenderer::FluidRenderer(std::size_t particleCount)
 {
-    program_ = linkGlslProgram(
+    depthProgram_ = buildGlslProgram(
         kParticleVertexShader,
         kParticleFragmentShader,
-        "embedded particle shader"
-    );
-    if (program_ == 0) {
+        "embedded particle shader");
+    if (depthProgram_ == 0) {
         throw std::runtime_error("Failed to create the particle shader program");
     }
 
-    viewLocation_ = glGetUniformLocation(program_, "uView");
-    projectionLocation_ = glGetUniformLocation(program_, "uProjection");
-    radiusLocation_ = glGetUniformLocation(program_, "uRadius");
-    viewportHLocation_ = glGetUniformLocation(program_, "uViewportH");
+    viewLocation_ = glGetUniformLocation(depthProgram_, "uView");
+    projectionLocation_ = glGetUniformLocation(depthProgram_, "uProjection");
+    radiusLocation_ = glGetUniformLocation(depthProgram_, "uRadius");
+    viewportHLocation_ = glGetUniformLocation(depthProgram_, "uViewportH");
     if (viewLocation_ == -1 || projectionLocation_ == -1 ||
         radiusLocation_ == -1 || viewportHLocation_ == -1) {
         shutdown();
         throw std::runtime_error("Cannot find a required particle shader uniform");
     }
 
-    surfaceProgram_ = linkGlslProgram(
+    blurProgram_ = buildGlslProgram(
+        kFullscreenVertexShader,
+        kBlurFragmentShader,
+        "fluid depth smoothing"
+    );
+    if (blurProgram_ == 0) {
+        shutdown();
+        throw std::runtime_error("Failed to create the depth smoothing program");
+    }
+
+    blurDirectionLocation_   = glGetUniformLocation(blurProgram_, "uDirection");
+    blurRadiusScaleLocation_ = glGetUniformLocation(blurProgram_, "uRadiusScale");
+    blurScaleLocation_       = glGetUniformLocation(blurProgram_, "uBlurScale");
+    blurNarrowRangeLocation_ = glGetUniformLocation(blurProgram_, "uNarrowRange");
+    if (blurDirectionLocation_ == -1 || blurRadiusScaleLocation_ == -1 ||
+        blurScaleLocation_ == -1 || blurNarrowRangeLocation_ == -1) {
+        shutdown();
+        throw std::runtime_error("Cannot find a required blur shader uniform");
+    }
+
+    glProgramUniform1i(blurProgram_, glGetUniformLocation(blurProgram_, "uSource"), 0);
+
+    surfaceProgram_ = buildGlslProgram(
         kFullscreenVertexShader,
         kSurfaceFragmentShader,
         "fluid surface shader"
@@ -177,18 +260,13 @@ FluidRenderer::FluidRenderer(std::size_t particleCount)
         throw std::runtime_error("Cannot find shader uniform uProjXY");
     }
 
-    // 告诉 uDepthField 这个 sampler 去 0 号纹理单元取数据。
-    //
-    // sampler uniform 存的不是纹理，而是一个"纹理单元编号"。运行时用
-    // glBindTextureUnit(0, tex) 把具体的纹理挂到 0 号单元上，shader 就读得到。
-    // 这个编号存在 program 对象里，设一次就够，不用每帧设。
     glProgramUniform1i(surfaceProgram_, glGetUniformLocation(surfaceProgram_, "uDepthField"), 0);
 
-    glCreateVertexArrays(1, &vao_);
+    glCreateVertexArrays(1, &depthVao_);
     glCreateVertexArrays(1, &emptyVao_);
-    glCreateBuffers(1, &vbo_);
+    glCreateBuffers(1, &depthVbo_);
 
-    if (vao_ == 0 || emptyVao_ == 0 || vbo_ == 0) {
+    if (depthVao_ == 0 || emptyVao_ == 0 || depthVbo_ == 0) {
         shutdown();
         throw std::runtime_error("Failed to create the particle VAO or VBO");
     }
@@ -196,7 +274,7 @@ FluidRenderer::FluidRenderer(std::size_t particleCount)
     particleCapacity_ = particleCount > 0 ? particleCount : 1;
 
     glNamedBufferData(
-        vbo_,
+        depthVbo_,
         static_cast<GLsizeiptr>(particleCapacity_ * sizeof(Vec3)),
         nullptr,
         GL_DYNAMIC_DRAW
@@ -204,15 +282,15 @@ FluidRenderer::FluidRenderer(std::size_t particleCount)
 
     // 绑定点 0 每个顶点读一个紧凑排列的 Vec3。
     glVertexArrayVertexBuffer(
-        vao_,
+        depthVao_,
         0,
-        vbo_,
+        depthVbo_,
         0,
         static_cast<GLsizei>(sizeof(Vec3))
     );
-    glEnableVertexArrayAttrib(vao_, 0);
-    glVertexArrayAttribFormat(vao_, 0, 3, GL_FLOAT, GL_FALSE, 0);
-    glVertexArrayAttribBinding(vao_, 0, 0);
+    glEnableVertexArrayAttrib(depthVao_, 0);
+    glVertexArrayAttribFormat(depthVao_, 0, 3, GL_FLOAT, GL_FALSE, 0);
+    glVertexArrayAttribBinding(depthVao_, 0, 0);
 }
 
 FluidRenderer::~FluidRenderer()
@@ -229,8 +307,10 @@ void FluidRenderer::ensureTarget(int width, int height)
     // glTextureStorage2D 创建的是不可变纹理，所以尺寸变化只能删掉重建，
     // 不能重新分配。FBO 本身可以复用，只换附件。
     if (depthField_ != 0)  { glDeleteTextures(1, &depthField_); depthField_ = 0; }
+    if (blurField_ != 0)   { glDeleteTextures(1, &blurField_); blurField_ = 0; }
     if (depthBuffer_ != 0) { glDeleteRenderbuffers(1, &depthBuffer_); depthBuffer_ = 0; }
     if (fbo_ == 0)         { glCreateFramebuffers(1, &fbo_); }
+    if (blurFbo_ == 0)     { glCreateFramebuffers(1, &blurFbo_); }
 
     targetWidth_  = width;
     targetHeight_ = height;
@@ -245,12 +325,29 @@ void FluidRenderer::ensureTarget(int width, int height)
     glTextureParameteri(depthField_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTextureParameteri(depthField_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    // 平滑的中转纹理，格式和采样方式必须与 depthField_ 完全一致——横向那一遍的
+    // 输出就是竖向那一遍的输入，两者精度不同会让第二遍在第一遍的量化台阶上工作。
+    glCreateTextures(GL_TEXTURE_2D, 1, &blurField_);
+    glTextureStorage2D(blurField_, 1, GL_R32F, width, height);
+    glTextureParameteri(blurField_, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(blurField_, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTextureParameteri(blurField_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(blurField_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
     glCreateRenderbuffers(1, &depthBuffer_);
     glNamedRenderbufferStorage(depthBuffer_, GL_DEPTH_COMPONENT24, width, height);
 
     glNamedFramebufferTexture(fbo_, GL_COLOR_ATTACHMENT0, depthField_, 0);
     glNamedFramebufferRenderbuffer(fbo_, GL_DEPTH_ATTACHMENT,
                                    GL_RENDERBUFFER, depthBuffer_);
+
+    // blurFbo_ 不需要深度附件：平滑是全屏 pass，深度测试是关掉的。
+    glNamedFramebufferTexture(blurFbo_, GL_COLOR_ATTACHMENT0, blurField_, 0);
+
+    if (glCheckNamedFramebufferStatus(blurFbo_, GL_FRAMEBUFFER)
+            != GL_FRAMEBUFFER_COMPLETE) {
+        throw std::runtime_error("Fluid blur framebuffer is incomplete");
+    }
 
     const GLenum status = glCheckNamedFramebufferStatus(fbo_, GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -277,7 +374,7 @@ void FluidRenderer::render(
     if (positions.size() > particleCapacity_) {
         particleCapacity_ = positions.size();
         glNamedBufferData(
-            vbo_,
+            depthVbo_,
             static_cast<GLsizeiptr>(particleCapacity_ * sizeof(Vec3)),
             nullptr,
             GL_DYNAMIC_DRAW
@@ -285,16 +382,16 @@ void FluidRenderer::render(
     }
 
     glNamedBufferSubData(
-        vbo_,
+        depthVbo_,
         0,
         static_cast<GLsizeiptr>(positions.size() * sizeof(Vec3)),
         positions.data()
     );
 
-    glProgramUniformMatrix4fv(program_, viewLocation_, 1, GL_FALSE, glm::value_ptr(view));
-    glProgramUniformMatrix4fv(program_, projectionLocation_, 1, GL_FALSE, glm::value_ptr(projection));
-    glProgramUniform1f(program_, radiusLocation_, radius);
-    glProgramUniform1f(program_, viewportHLocation_,
+    glProgramUniformMatrix4fv(depthProgram_, viewLocation_, 1, GL_FALSE, glm::value_ptr(view));
+    glProgramUniformMatrix4fv(depthProgram_, projectionLocation_, 1, GL_FALSE, glm::value_ptr(projection));
+    glProgramUniform1f(depthProgram_, radiusLocation_, radius);
+    glProgramUniform1f(depthProgram_, viewportHLocation_,
                        static_cast<float>(viewportHeight));
 
     // 绑定fbo
@@ -303,14 +400,52 @@ void FluidRenderer::render(
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glUseProgram(program_);
-    glBindVertexArray(vao_);
+    glUseProgram(depthProgram_);
+    glBindVertexArray(depthVao_);
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(positions.size()));
     glBindVertexArray(0);
     glUseProgram(0);
 
     // -----------------------------------------------------------------------
-    // 第二个 pass：读深度场，重建法线打光，画到屏幕
+    // pass 2/3：深度平滑，横竖各一遍
+    // -----------------------------------------------------------------------
+    // 深度测试关掉，全屏 pass 不需要它；顺手把深度写也关掉，免得往 fbo_ 的深度
+    // renderbuffer 里写进无意义的 0.5。
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+
+    // uRadiusScale = viewportH · proj[1][1] · r / 2
+    // 也就是这颗粒子在 z = 1 m 处占的像素半径。shader 里再除以逐像素的 z。
+    const float radiusScale = static_cast<float>(viewportHeight) * projection[1][1] * radius * 0.5f;
+
+    glProgramUniform1f(blurProgram_, blurRadiusScaleLocation_, radiusScale);
+    glProgramUniform1f(blurProgram_, blurScaleLocation_, blurScale);
+    // narrowRange 在头文件里以"粒子半径"为单位，这里换成米交给 shader。
+    glProgramUniform1f(blurProgram_, blurNarrowRangeLocation_, narrowRange * radius);
+
+    glUseProgram(blurProgram_);
+    glBindVertexArray(emptyVao_);
+
+    // 横向：读 depthField_ -> 写 blurField_
+    glBindFramebuffer(GL_FRAMEBUFFER, blurFbo_);
+    glBindTextureUnit(0, depthField_);
+    glProgramUniform2f(blurProgram_, blurDirectionLocation_,
+                       1.0f / static_cast<float>(viewportWidth), 0.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // 竖向：读 blurField_ -> 写回 depthField_
+    // 读和写是两张不同的纹理，所以没有反馈；两遍之后 depthField_ 就是平滑结果。
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glBindTextureUnit(0, blurField_);
+    glProgramUniform2f(blurProgram_, blurDirectionLocation_,
+                       0.0f, 1.0f / static_cast<float>(viewportHeight));
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+
+    // -----------------------------------------------------------------------
+    // pass 4：读深度场，重建法线打光，画到屏幕
     // -----------------------------------------------------------------------
     // 绑回 0 号帧缓冲，也就是窗口本身。不解绑的话，下一帧 main.cpp 的清屏和地板
     // 会画进 FBO 里，屏幕就再也不刷新了（症状是画面卡在第一帧）。
@@ -334,22 +469,21 @@ void FluidRenderer::render(
     glBindVertexArray(0);
     glUseProgram(0);
 
-    // 恢复这个函数改过的两个状态。main.cpp 是在循环外一次性开的深度测试和混合，
-    // 这里不恢复，下一帧地板就没有深度测试、也没有径向渐隐了。
+    // 恢复函数改过的两个状态
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
 }
 
 void FluidRenderer::shutdown()
 {
-    if (vbo_ != 0) {
-        glDeleteBuffers(1, &vbo_);
-        vbo_ = 0;
+    if (depthVbo_ != 0) {
+        glDeleteBuffers(1, &depthVbo_);
+        depthVbo_ = 0;
     }
 
-    if (vao_ != 0) {
-        glDeleteVertexArrays(1, &vao_);
-        vao_ = 0;
+    if (depthVao_ != 0) {
+        glDeleteVertexArrays(1, &depthVao_);
+        depthVao_ = 0;
     }
 
     if (emptyVao_ != 0) {
@@ -361,6 +495,26 @@ void FluidRenderer::shutdown()
         glDeleteTextures(1, &depthField_);
         depthField_ = 0;
     }
+
+    if (blurField_ != 0) {
+        glDeleteTextures(1, &blurField_);
+        blurField_ = 0;
+    }
+
+    if (blurFbo_ != 0) {
+        glDeleteFramebuffers(1, &blurFbo_);
+        blurFbo_ = 0;
+    }
+
+    if (blurProgram_ != 0) {
+        glDeleteProgram(blurProgram_);
+        blurProgram_ = 0;
+    }
+
+    blurDirectionLocation_   = -1;
+    blurRadiusScaleLocation_ = -1;
+    blurScaleLocation_       = -1;
+    blurNarrowRangeLocation_ = -1;
 
     if (depthBuffer_ != 0) {
         glDeleteRenderbuffers(1, &depthBuffer_);
@@ -375,9 +529,9 @@ void FluidRenderer::shutdown()
     targetWidth_ = 0;
     targetHeight_ = 0;
 
-    if (program_ != 0) {
-        glDeleteProgram(program_);
-        program_ = 0;
+    if (depthProgram_ != 0) {
+        glDeleteProgram(depthProgram_);
+        depthProgram_ = 0;
     }
 
     if (surfaceProgram_ != 0) {

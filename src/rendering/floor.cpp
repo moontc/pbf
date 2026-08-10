@@ -98,7 +98,7 @@ void main()
 
 Floor::Floor(const Vec3& boxLo, const Vec3& boxHi)
 {
-    program_ = linkGlslProgram(
+    program_ = buildGlslProgram(
         kFloorVertexShader,
         kFloorFragmentShader,
         "embedded floor shader"

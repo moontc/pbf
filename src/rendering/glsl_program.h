@@ -45,7 +45,7 @@ inline GLuint compileGlslShader(
     return 0;
 }
 
-inline GLuint linkGlslProgram(
+inline GLuint buildGlslProgram(
     const char* vertexSource,
     const char* fragmentSource,
     const char* name

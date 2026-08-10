@@ -61,7 +61,7 @@ void main()
 
 GLuint createParticleProgram()
 {
-    return linkGlslProgram(
+    return buildGlslProgram(
         kParticleVertexShader,
         kParticleFragmentShader,
         "embedded particle shader"
