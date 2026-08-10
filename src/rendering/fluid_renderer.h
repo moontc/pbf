@@ -31,6 +31,24 @@ private:
     // 尺寸变化时重建离屏目标
     void ensureTarget(int width, int height);
 
+    void uploadPositions(const std::vector<Vec3>& positions);
+
+    void initDepthPass();
+    void initThicknessPass();
+    void initBlurPass();
+    void initSurfacePass();
+
+    void drawDepthField(const glm::mat4& view, const glm::mat4& projection,
+                        float radius, int viewportHeight, GLsizei count);
+
+    void drawThicknessField(const glm::mat4& view, const glm::mat4& projection,
+                            float radius, int viewportHeight, GLsizei count);
+
+    void blurDepthField(const glm::mat4& projection, float radius,
+                        int viewportWidth, int viewportHeight);
+
+    void shadeSurface(const glm::mat4& projection);
+
     // pass 1 深度场：到流体表面的眼空间距离，没有流体的地方是 0。
     GLuint depthProgram_ = 0;
     GLuint depthVao_ = 0;
