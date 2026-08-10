@@ -12,10 +12,10 @@ static_assert(sizeof(Vec3) == 3 * sizeof(float),
 
 struct PbfParams {
     float rho0 = 1000.0f;         // 静止密度
-    float d    = 0.015f;           // 粒子间距
-    float h    = 0.030f;           // 光滑核半径 (= 2d)
-    float mass = 0.00334233;     // 标定：静止规则排布时 rho_i 必须 = rho0
-    float eps  = 8.13778;         // 标定：CFM 松弛，量纲 1/m^2
+    float d    = 0.010f;           // 粒子间距
+    float h    = 0.020f;           // 光滑核半径 (= 2d)
+    float mass = 0.00099032;     // 标定：静止规则排布时 rho_i 必须 = rho0
+    float eps  = 18.31001;         // 标定：CFM 松弛，量纲 1/m^2
 
     // --- 求解器 ---
     int   substeps    = 4;        // 论文 Table 1: Dam Break = 4

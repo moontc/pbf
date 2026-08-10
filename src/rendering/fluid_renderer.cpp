@@ -39,7 +39,7 @@ void main() {
 }
 )glsl";
 
-// pass 3/4（深度平滑）和 pass 5（表面着色）共用
+// 深度平滑、厚度平滑和表面着色共用
 constexpr char kFullscreenVertexShader[] =
     // language=GLSL
         R"glsl(#version 460 core
@@ -190,6 +190,9 @@ void FluidRenderer::render(
     drawDepthField(view, projection, radius, viewportHeight, count);
     drawThicknessField(view, projection, radius, viewportHeight, count);
     blurDepthField(projection, radius, viewportWidth, viewportHeight);
+    // 顺序不能换：厚度平滑的半径和空白判断都读 depthField_，要的是上一行平滑
+    // 之后的版本；而且它借用 blurField_ 当中转，那张纹理得等深度平滑用完。
+    blurThicknessField(projection, radius, viewportWidth, viewportHeight);
     shadeSurface(projection);
 
     // 把 GL 状态恢复成 main.cpp 在初始化时设定的那一套。上面的 pass 改过
@@ -224,7 +227,7 @@ void FluidRenderer::uploadPositions(const std::vector<Vec3>& positions)
     );
 }
 
-// pass 1：深度场
+// 深度场
 void FluidRenderer::initDepthPass()
 {
     constexpr char kFragmentShader[] =
@@ -313,7 +316,7 @@ void FluidRenderer::drawDepthField(
     glUseProgram(0);
 }
 
-// pass 2：厚度场
+// 厚度场
 void FluidRenderer::initThicknessPass()
 {
     constexpr char kFragmentShader[] =
@@ -364,7 +367,7 @@ void FluidRenderer::drawThicknessField(
     GLsizei count
 )
 {
-    // 顶点着色器和 pass 1 是同一份源码，但 uniform 位置属于 program 对象，
+    // 顶点着色器和深度场那一遍是同一份源码，但 uniform 位置属于 program 对象，
     // 每个 program 各有一份，所以要单独再传一次。
     glProgramUniformMatrix4fv(thicknessProgram_, thickViewLocation_, 1, GL_FALSE,
                               glm::value_ptr(view));
@@ -393,7 +396,7 @@ void FluidRenderer::drawThicknessField(
     glUseProgram(0);
 }
 
-// pass 3/4：深度平滑
+// 深度平滑，同时也是厚度平滑用的那个 program
 void FluidRenderer::initBlurPass()
 {
     // 窄范围滤波 (narrow-range filter, Truong & Yuksel 2018)
@@ -401,13 +404,15 @@ void FluidRenderer::initBlurPass()
         // language=GLSL
             R"glsl(#version 460 core
 
-uniform sampler2D uSource;
+uniform sampler2D uSource;        // 要平滑的场：深度场或厚度场
+uniform sampler2D uDepth;         // 深度场；平滑深度时它和 uSource 是同一张纹理
 uniform vec2      uDirection;     // 一个 texel 的步长：(1/w,0) 或 (0,1/h)
 uniform float     uRadiusScale;   // 粒子在 z=1m 处的像素半径
 uniform float     uBlurScale;     // 滤波半径 = 几倍粒子半径
-uniform float     uNarrowRange;   // 深度窗口，米
+uniform float     uNarrowRange;   // 深度窗口，米；只在 uNarrow 为 true 时用得上
+uniform bool      uNarrow;        // true = 平滑深度，做窄范围裁剪
 
-layout(location = 0) out float fragDistance;
+layout(location = 0) out float fragValue;
 
 // 循环上界必须是编译期常量，实际半径靠 break 截断
 const int kMaxRadius = 32;
@@ -415,16 +420,20 @@ const int kMaxRadius = 32;
 void main() {
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(uSource, 0));
 
-    float z0 = texture(uSource, uv).r;
+    // 滤波半径和"这里有没有流体"这两件事都只看深度：厚度是一个沿视线的长度，
+    // 没有"距摄像机多远"的含义，定不出以米为单位的窗口，也算不出像素半径。
+    float z0 = texture(uDepth, uv).r;
     if (z0 <= 0.0) {
-        fragDistance = 0.0;
+        fragValue = 0.0;
         return;
     }
+
+    float v0 = texture(uSource, uv).r;   // 中心的待平滑值
 
     // R = uBlurScale · uRadiusScale / z,   uRadiusScale = viewportH·proj[1][1]·r / 2
     int R = int(min(uBlurScale * uRadiusScale / z0, float(kMaxRadius)));
     if (R < 1) {
-        fragDistance = z0;
+        fragValue = v0;
         return;
     }
 
@@ -433,7 +442,7 @@ void main() {
     float sigma  = float(R) * 0.5;
     float inv2s2 = 1.0 / (2.0 * sigma * sigma);
 
-    float sum     = z0;      // i=0 的中心样本，w(0) = exp(0) = 1
+    float sum     = v0;      // i=0 的中心样本，w(0) = exp(0) = 1
     float weights = 1.0;
 
     for (int i = 1; i <= kMaxRadius; ++i) {
@@ -442,17 +451,28 @@ void main() {
         float w = exp(-float(i * i) * inv2s2);
 
         for (int side = -1; side <= 1; side += 2) {   // 对称的两侧
-            float zi = texture(uSource, uv + uDirection * float(i * side)).r;
+            vec2  suv = uv + uDirection * float(i * side);
+            float zi  = texture(uDepth, suv).r;
 
+            // 空白区域一律不参与平均。少了这一句，轮廓附近会把外面的 0 混进来，
+            // 深度被拉远、厚度被拉薄，边缘出现一圈过度透明的晕。
             if (zi <= 0.0) continue;
-            if (zi < z0 - uNarrowRange) continue;
 
-            sum     += w * min(zi, z0 + uNarrowRange);
+            float vi = texture(uSource, suv).r;
+
+            if (uNarrow) {
+                // 窄范围滤波的非对称处理：靠前的样本是另一层流体，直接丢弃；
+                // 靠后的样本夹到窗口边界后保留——丢弃它会让轮廓被啃掉一圈。
+                if (zi < z0 - uNarrowRange) continue;
+                vi = min(vi, z0 + uNarrowRange);
+            }
+
+            sum     += w * vi;
             weights += w;
         }
     }
 
-    fragDistance = sum / weights;
+    fragValue = sum / weights;
 }
 )glsl";
 
@@ -470,15 +490,18 @@ void main() {
     blurRadiusScaleLocation_ = glGetUniformLocation(blurProgram_, "uRadiusScale");
     blurScaleLocation_       = glGetUniformLocation(blurProgram_, "uBlurScale");
     blurNarrowRangeLocation_ = glGetUniformLocation(blurProgram_, "uNarrowRange");
+    blurNarrowLocation_      = glGetUniformLocation(blurProgram_, "uNarrow");
     if (blurDirectionLocation_ == -1 || blurRadiusScaleLocation_ == -1 ||
-        blurScaleLocation_ == -1 || blurNarrowRangeLocation_ == -1) {
+        blurScaleLocation_ == -1 || blurNarrowRangeLocation_ == -1 ||
+        blurNarrowLocation_ == -1) {
         shutdown();
         throw std::runtime_error("Cannot find a required blur shader uniform");
     }
 
     // sampler uniform 存的是"纹理单元编号"，不是纹理本身。这里定死 uSource 去
-    // 0 号单元取数据，之后每帧只需要 glBindTextureUnit(0, ...) 换纹理。
+    // 0 号单元、uDepth 去 1 号单元取数据，之后每帧只需要 glBindTextureUnit 换纹理。
     glProgramUniform1i(blurProgram_, glGetUniformLocation(blurProgram_, "uSource"), 0);
+    glProgramUniform1i(blurProgram_, glGetUniformLocation(blurProgram_, "uDepth"), 1);
 }
 
 // 横竖各一遍。
@@ -506,6 +529,7 @@ void FluidRenderer::blurDepthField(
     glProgramUniform1f(blurProgram_, blurScaleLocation_, blurScale);
     // narrowRange 在头文件里以"粒子半径"为单位，这里换成米交给 shader。
     glProgramUniform1f(blurProgram_, blurNarrowRangeLocation_, narrowRange * radius);
+    glProgramUniform1i(blurProgram_, blurNarrowLocation_, GL_TRUE);   // 做窄范围裁剪
 
     glUseProgram(blurProgram_);
     glBindVertexArray(emptyVao_);
@@ -513,9 +537,13 @@ void FluidRenderer::blurDepthField(
     // 可分离滤波：G(x,y) = G(x)·G(y)，所以 (2R+1)² 的窗口能拆成横竖两遍，
     // 采样数降到 2(2R+1)。中间结果落在 blurField_ 上。
     //
+    // 平滑深度时被平滑的场就是深度场本身，所以 uSource 和 uDepth 绑同一张纹理。
+    // 同一张纹理挂在两个纹理单元上是合法的，shader 里两次采样命中同一份缓存。
+    //
     // 横向：读 depthField_ -> 写 blurField_
     glBindFramebuffer(GL_FRAMEBUFFER, blurFbo_);
     glBindTextureUnit(0, depthField_);
+    glBindTextureUnit(1, depthField_);
     glProgramUniform2f(blurProgram_, blurDirectionLocation_,
                        1.0f / static_cast<float>(viewportWidth), 0.0f);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -525,6 +553,7 @@ void FluidRenderer::blurDepthField(
     // 行为）；两遍跑完，平滑结果就又回到了 depthField_ 里。
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glBindTextureUnit(0, blurField_);
+    glBindTextureUnit(1, blurField_);
     glProgramUniform2f(blurProgram_, blurDirectionLocation_,
                        0.0f, 1.0f / static_cast<float>(viewportHeight));
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -533,7 +562,57 @@ void FluidRenderer::blurDepthField(
     glUseProgram(0);
 }
 
-// pass 5：表面着色
+// 厚度平滑，横竖各一遍。和深度平滑同一个 program，只是换了输入、关掉窄范围裁剪。
+void FluidRenderer::blurThicknessField(
+    const glm::mat4& projection,
+    float radius,
+    int viewportWidth,
+    int viewportHeight
+)
+{
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+
+    const float radiusScale =
+        static_cast<float>(viewportHeight) * projection[1][1] * radius * 0.5f;
+
+    glProgramUniform1f(blurProgram_, blurRadiusScaleLocation_, radiusScale);
+    glProgramUniform1f(blurProgram_, blurScaleLocation_, blurScale);
+
+    // 关掉窄范围裁剪。那套非对称处理是给深度用的：它要防止把另一层流体的距离
+    // 混进来，做出不存在的表面。厚度没有这个问题——它本来就是沿视线累加的量，
+    // 跨深度断层混一点只会让吸收的过渡软一些，反而更接近真实的次表面散射。
+    glProgramUniform1i(blurProgram_, blurNarrowLocation_, GL_FALSE);
+
+    glUseProgram(blurProgram_);
+    glBindVertexArray(emptyVao_);
+
+    // uDepth 全程绑已经平滑好的 depthField_：半径和空白判断都靠它，而这两件事
+    // 都要用最终的深度，这就是本函数必须排在 blurDepthField 之后的原因。
+    glBindTextureUnit(1, depthField_);
+
+    // 横向：读 thicknessField_ -> 写 blurField_
+    // 借用深度平滑的中转纹理。它是 R32F，装 R16F 的厚度富富有余；深度平滑跑完
+    // 结果已经回到 depthField_，这张纹理就空出来了。
+    glBindFramebuffer(GL_FRAMEBUFFER, blurFbo_);
+    glBindTextureUnit(0, thicknessField_);
+    glProgramUniform2f(blurProgram_, blurDirectionLocation_,
+                       1.0f / static_cast<float>(viewportWidth), 0.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // 竖向：读 blurField_ -> 写回 thicknessField_
+    glBindFramebuffer(GL_FRAMEBUFFER, thicknessFbo_);
+    glBindTextureUnit(0, blurField_);
+    glProgramUniform2f(blurProgram_, blurDirectionLocation_,
+                       0.0f, 1.0f / static_cast<float>(viewportHeight));
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+// 表面着色
 void FluidRenderer::initSurfacePass()
 {
     // 从深度场重建表面法线，然后打光
@@ -724,6 +803,7 @@ void FluidRenderer::shutdown()
     blurRadiusScaleLocation_ = -1;
     blurScaleLocation_       = -1;
     blurNarrowRangeLocation_ = -1;
+    blurNarrowLocation_      = -1;
 
     if (depthBuffer_ != 0) {
         glDeleteRenderbuffers(1, &depthBuffer_);

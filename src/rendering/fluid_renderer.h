@@ -47,9 +47,13 @@ private:
     void blurDepthField(const glm::mat4& projection, float radius,
                         int viewportWidth, int viewportHeight);
 
+    // 必须排在 blurDepthField 之后：它的滤波半径要用已经平滑好的深度。
+    void blurThicknessField(const glm::mat4& projection, float radius,
+                            int viewportWidth, int viewportHeight);
+
     void shadeSurface(const glm::mat4& projection);
 
-    // pass 1 深度场：到流体表面的眼空间距离，没有流体的地方是 0。
+    // 深度场：到流体表面的眼空间距离，没有流体的地方是 0。
     GLuint depthProgram_ = 0;
     GLuint depthVao_ = 0;
     GLuint depthVbo_ = 0;
@@ -64,13 +68,7 @@ private:
     int    targetWidth_ = 0;
     int    targetHeight_ = 0;
 
-    // pass 2 厚度场：视线在水里走过的总长度，米。Beer-Lambert 的 d 就是它。
-    //
-    // 和 pass 1 共用同一个顶点着色器（球体 imposter 的几何是一样的），所以这里
-    // 也要一套同名的 uniform 位置——它们属于 program 对象，两个 program 各有一份。
-    //
-    // R16F 够用：值在 0~0.5 m 量级，半精度有约 3 位十进制有效数字，而这个量最终
-    // 只是喂给 exp()，不像深度那样要和毫米级窗口做比较。
+    // 厚度场：视线在水里走过的总长度，米。Beer-Lambert 的 d 就是它。
     GLuint thicknessFbo_ = 0;
     GLuint thicknessField_ = 0;
     GLuint thicknessProgram_ = 0;
@@ -79,7 +77,7 @@ private:
     GLint  thickRadiusLocation_ = -1;
     GLint  thickViewportHLocation_ = -1;
 
-    // pass 3/4 深度平滑
+    // 深度平滑和厚度平滑，各横竖两遍。
     GLuint blurFbo_ = 0;
     GLuint blurField_ = 0;
     GLuint blurProgram_ = 0;
@@ -87,8 +85,10 @@ private:
     GLint  blurRadiusScaleLocation_ = -1;
     GLint  blurScaleLocation_ = -1;
     GLint  blurNarrowRangeLocation_ = -1;
+    GLint  blurNarrowLocation_ = -1;
 
-    // pass 5
+    // 表面着色：读平滑后的深度场和厚度场，重建法线 + Beer-Lambert，画到屏幕。
+    // emptyVao_ 给全屏三角形用——核心 profile 下没绑 VAO 的 glDrawArrays 什么都不画。
     GLuint surfaceProgram_ = 0;
     GLuint emptyVao_ = 0;
     GLint  surfaceProjXYLocation_ = -1;
