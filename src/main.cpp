@@ -23,10 +23,12 @@
 #include "solvers/cuda_pbf_solver.cuh"
 #include "rendering/fluid_renderer.h"
 
-int main() {
+namespace {
+
+GLFWwindow* initializeOpenGL() {
     if (!glfwInit()) {
         std::fprintf(stderr, "fail to init GLFW\n");
-        return 1;
+        return nullptr;
     }
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -46,10 +48,9 @@ int main() {
     );
 
     if (!window) {
-        std::fprintf(stderr, "fail to creat window\n");
+        std::fprintf(stderr, "fail to create window\n");
         glfwTerminate();
-
-        return 1;
+        return nullptr;
     }
 
     glfwMakeContextCurrent(window);
@@ -59,7 +60,7 @@ int main() {
         std::fprintf(stderr, "fail to load GL\n");
         glfwDestroyWindow(window);
         glfwTerminate();
-        return 1;
+        return nullptr;
     }
 
     std::printf(
@@ -71,6 +72,16 @@ int main() {
     std::printf("Renderer: %s\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
     std::printf("Version:  %s\n", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
 
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_PROGRAM_POINT_SIZE);
+
+    return window;
+}
+
+bool initializeCUDA() {
     int device = 0;
     cudaError_t error = cudaGetDevice(&device);
 
@@ -80,7 +91,7 @@ int main() {
             "cudaGetDevice failed: %s\n",
             cudaGetErrorString(error)
         );
-        return 1;
+        return false;
     }
 
     cudaDeviceProp properties{};
@@ -92,7 +103,7 @@ int main() {
             "cudaGetDeviceProperties failed: %s\n",
             cudaGetErrorString(error)
         );
-        return 1;
+        return false;
     }
 
     std::printf("CUDA device: %d\n", device);
@@ -112,15 +123,24 @@ int main() {
         properties.multiProcessorCount
     );
 
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_PROGRAM_POINT_SIZE);
+    return true;
+}
+
+} // namespace
+
+int main() {
+    GLFWwindow* window = initializeOpenGL();
+    if (!window) {
+        return 1;
+    }
+
+    if (!initializeCUDA()) {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 1;
+    }
 
     constexpr bool kProfileFrames = true;
-
-
 
     const Vec3 blockLo(0.05f, 0.05f, 0.05f);
     const Vec3 blockHi(0.45f, 0.90f, 0.45f);
