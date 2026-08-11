@@ -25,7 +25,7 @@
 
 namespace {
 
-GLFWwindow* initializeOpenGL() {
+GLFWwindow* initOpenGL() {
     if (!glfwInit()) {
         std::fprintf(stderr, "fail to init GLFW\n");
         return nullptr;
@@ -81,7 +81,7 @@ GLFWwindow* initializeOpenGL() {
     return window;
 }
 
-bool initializeCUDA() {
+bool initCUDA() {
     int device = 0;
     cudaError_t error = cudaGetDevice(&device);
 
@@ -129,12 +129,12 @@ bool initializeCUDA() {
 } // namespace
 
 int main() {
-    GLFWwindow* window = initializeOpenGL();
+    GLFWwindow* window = initOpenGL();
     if (!window) {
         return 1;
     }
 
-    if (!initializeCUDA()) {
+    if (!initCUDA()) {
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
