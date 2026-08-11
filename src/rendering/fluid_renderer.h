@@ -51,9 +51,9 @@ private:
     void blurThicknessField(const glm::mat4& projection, float radius,
                             int viewportWidth, int viewportHeight);
 
-    void shadeSurface(const glm::mat4& projection);
+    void shadeSurface(const glm::mat4& projection, float radius);
 
-    // 深度场：到流体表面的眼空间距离，没有流体的地方是 0。
+    // 深度场：到流体表面的视空间距离，没有流体的地方是 0。
     GLuint depthProgram_ = 0;
     GLuint depthVao_ = 0;
     GLuint depthVbo_ = 0;
@@ -77,15 +77,13 @@ private:
     GLint  thickRadiusLocation_ = -1;
     GLint  thickViewportHLocation_ = -1;
 
-    // 深度平滑和厚度平滑，各横竖两遍。
+    // 可分离高斯，深度场和厚度场都是横竖各一遍，共用同一个 program。
     GLuint blurFbo_ = 0;
     GLuint blurField_ = 0;
     GLuint blurProgram_ = 0;
     GLint  blurDirectionLocation_ = -1;
     GLint  blurRadiusScaleLocation_ = -1;
     GLint  blurScaleLocation_ = -1;
-    GLint  blurNarrowRangeLocation_ = -1;
-    GLint  blurNarrowLocation_ = -1;
 
     // 表面着色：读平滑后的深度场和厚度场，重建法线 + Beer-Lambert，画到屏幕。
     // emptyVao_ 给全屏三角形用——核心 profile 下没绑 VAO 的 glDrawArrays 什么都不画。
@@ -93,13 +91,20 @@ private:
     GLuint emptyVao_ = 0;
     GLint  surfaceProjXYLocation_ = -1;
     GLint  surfaceAbsorbLocation_ = -1;
+    GLint  surfaceNormalThresholdLocation_ = -1;
 
     std::size_t particleCapacity_ = 0;
 
 public:
     // 可调参数，以"粒子半径"为单位
-    float blurScale   = 3.0f;   // 滤波半径 = 几倍粒子半径
-    float narrowRange = 8.0f;   // 深度窗口 = 几倍粒子半径
+    float blurScale   = 3.0f;   // 空间标准差 σ_s 对应的滤波半径 = 几倍粒子半径
+
+    // 法线重建时判定"这两侧是不是同一层水面"的深度差阈值，单位是粒子半径。
+    // shadeSurface 传给 shader 的是 2 · sigmaRange · r。
+    //
+    // 曾经它还兼任平滑的范围标准差 σ_r（双边 / 窄范围滤波），现在不是了：平滑退回
+    // 了纯高斯，权重里不含任何依赖 z 的项。原因见 initBlurPass 顶部的注释。
+    float sigmaRange  = 4.0f;
 
     // Beer-Lambert 吸收系数的夸大倍数。
     //

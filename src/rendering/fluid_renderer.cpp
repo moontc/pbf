@@ -193,7 +193,7 @@ void FluidRenderer::render(
     // 顺序不能换：厚度平滑的半径和空白判断都读 depthField_，要的是上一行平滑
     // 之后的版本；而且它借用 blurField_ 当中转，那张纹理得等深度平滑用完。
     blurThicknessField(projection, radius, viewportWidth, viewportHeight);
-    shadeSurface(projection);
+    shadeSurface(projection, radius);
 
     // 把 GL 状态恢复成 main.cpp 在初始化时设定的那一套。上面的 pass 改过
     // 深度测试、深度写和混合，不恢复的话下一帧的地板 pass 会用错的状态画。
@@ -277,7 +277,7 @@ void main() {
     }
 }
 
-// 每个像素记录最靠前的那个球面的眼空间距离，没有流体的地方是 0。
+// 每个像素记录最靠前的那个球面的视空间距离，没有流体的地方是 0。
 void FluidRenderer::drawDepthField(
     const glm::mat4& view,
     const glm::mat4& projection,
@@ -399,7 +399,15 @@ void FluidRenderer::drawThicknessField(
 // 深度平滑，同时也是厚度平滑用的那个 program
 void FluidRenderer::initBlurPass()
 {
-    // 窄范围滤波 (narrow-range filter, Truong & Yuksel 2018)
+    // 可分离高斯，横竖各一遍。深度场和厚度场用同一份代码，只换输入纹理。
+    //
+    // 权重里**没有**任何依赖 z 的项，这是刻意的。二维高斯之所以能拆成两个一维
+    // 高斯，前提是 G(x,y) = G(x)·G(y)，即权重只由偏移决定。一旦权重里掺进
+    // 逐像素的深度（双边的范围项、窄范围滤波的丢弃/夹取），可分离性就不成立，
+    // 横一遍的误差会被竖一遍沿另一个方向拉长，屏幕上表现为轴向的竖条纹。
+    //
+    // 唯一保留的深度相关判断是 `zi <= 0`（空白），它是二值的、且轮廓两侧一致，
+    // 不引入方向性偏置。
     constexpr char kFragmentShader[] =
         // language=GLSL
             R"glsl(#version 460 core
@@ -409,16 +417,15 @@ uniform sampler2D uDepth;         // 深度场；平滑深度时它和 uSource �
 uniform vec2      uDirection;     // 一个 texel 的步长：(1/w,0) 或 (0,1/h)
 uniform float     uRadiusScale;   // 粒子在 z=1m 处的像素半径
 uniform float     uBlurScale;     // 滤波半径 = 几倍粒子半径
-uniform float     uNarrowRange;   // 深度窗口，米；只在 uNarrow 为 true 时用得上
-uniform bool      uNarrow;        // true = 平滑深度，做窄范围裁剪
 
 layout(location = 0) out float fragValue;
 
-// 循环上界必须是编译期常量，实际半径靠 break 截断
+// 循环上界必须是编译期常量，实际半径靠 break 截断。
 const int kMaxRadius = 32;
 
 void main() {
-    vec2 uv = gl_FragCoord.xy / vec2(textureSize(uSource, 0));
+    vec2 texel = 1.0 / vec2(textureSize(uSource, 0));
+    vec2 uv    = gl_FragCoord.xy * texel;
 
     // 滤波半径和"这里有没有流体"这两件事都只看深度：厚度是一个沿视线的长度，
     // 没有"距摄像机多远"的含义，定不出以米为单位的窗口，也算不出像素半径。
@@ -430,7 +437,7 @@ void main() {
 
     float v0 = texture(uSource, uv).r;   // 中心的待平滑值
 
-    // R = uBlurScale · uRadiusScale / z,   uRadiusScale = viewportH·proj[1][1]·r / 2
+    // R = uBlurScale · uRadiusScale / z，最大不超过 kMaxRadius。
     int R = int(min(uBlurScale * uRadiusScale / z0, float(kMaxRadius)));
     if (R < 1) {
         fragValue = v0;
@@ -458,16 +465,7 @@ void main() {
             // 深度被拉远、厚度被拉薄，边缘出现一圈过度透明的晕。
             if (zi <= 0.0) continue;
 
-            float vi = texture(uSource, suv).r;
-
-            if (uNarrow) {
-                // 窄范围滤波的非对称处理：靠前的样本是另一层流体，直接丢弃；
-                // 靠后的样本夹到窗口边界后保留——丢弃它会让轮廓被啃掉一圈。
-                if (zi < z0 - uNarrowRange) continue;
-                vi = min(vi, z0 + uNarrowRange);
-            }
-
-            sum     += w * vi;
+            sum     += w * texture(uSource, suv).r;
             weights += w;
         }
     }
@@ -489,11 +487,8 @@ void main() {
     blurDirectionLocation_   = glGetUniformLocation(blurProgram_, "uDirection");
     blurRadiusScaleLocation_ = glGetUniformLocation(blurProgram_, "uRadiusScale");
     blurScaleLocation_       = glGetUniformLocation(blurProgram_, "uBlurScale");
-    blurNarrowRangeLocation_ = glGetUniformLocation(blurProgram_, "uNarrowRange");
-    blurNarrowLocation_      = glGetUniformLocation(blurProgram_, "uNarrow");
     if (blurDirectionLocation_ == -1 || blurRadiusScaleLocation_ == -1 ||
-        blurScaleLocation_ == -1 || blurNarrowRangeLocation_ == -1 ||
-        blurNarrowLocation_ == -1) {
+        blurScaleLocation_ == -1) {
         shutdown();
         throw std::runtime_error("Cannot find a required blur shader uniform");
     }
@@ -504,7 +499,7 @@ void main() {
     glProgramUniform1i(blurProgram_, glGetUniformLocation(blurProgram_, "uDepth"), 1);
 }
 
-// 横竖各一遍。
+// 深度平滑，横竖各一遍。
 void FluidRenderer::blurDepthField(
     const glm::mat4& projection,
     float radius,
@@ -527,20 +522,15 @@ void FluidRenderer::blurDepthField(
 
     glProgramUniform1f(blurProgram_, blurRadiusScaleLocation_, radiusScale);
     glProgramUniform1f(blurProgram_, blurScaleLocation_, blurScale);
-    // narrowRange 在头文件里以"粒子半径"为单位，这里换成米交给 shader。
-    glProgramUniform1f(blurProgram_, blurNarrowRangeLocation_, narrowRange * radius);
-    glProgramUniform1i(blurProgram_, blurNarrowLocation_, GL_TRUE);   // 做窄范围裁剪
 
     glUseProgram(blurProgram_);
     glBindVertexArray(emptyVao_);
 
-    // 可分离滤波：G(x,y) = G(x)·G(y)，所以 (2R+1)² 的窗口能拆成横竖两遍，
-    // 采样数降到 2(2R+1)。中间结果落在 blurField_ 上。
-    //
-    // 平滑深度时被平滑的场就是深度场本身，所以 uSource 和 uDepth 绑同一张纹理。
-    // 同一张纹理挂在两个纹理单元上是合法的，shader 里两次采样命中同一份缓存。
-    //
-    // 横向：读 depthField_ -> 写 blurField_
+    // 平滑深度时 uSource 和 uDepth 是同一张纹理：待平滑的值本身就是深度。
+    // 第二遍读的是第一遍的输出，所以 uDepth 也要跟着换成 blurField_，否则半径
+    // 和空白判断会用未平滑的深度，两遍的支撑域对不上。
+
+    // 横向：depthField_ -> blurField_
     glBindFramebuffer(GL_FRAMEBUFFER, blurFbo_);
     glBindTextureUnit(0, depthField_);
     glBindTextureUnit(1, depthField_);
@@ -548,9 +538,8 @@ void FluidRenderer::blurDepthField(
                        1.0f / static_cast<float>(viewportWidth), 0.0f);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    // 竖向：读 blurField_ -> 写回 depthField_
-    // 读和写始终是两张不同的纹理，所以不存在采样自己正在写的纹理（那是未定义
-    // 行为）；两遍跑完，平滑结果就又回到了 depthField_ 里。
+    // 竖向：blurField_ -> depthField_。后面的厚度平滑和表面着色都约定最终深度
+    // 位于 depthField_，写回这里之后 blurField_ 就空出来给厚度当中转。
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glBindTextureUnit(0, blurField_);
     glBindTextureUnit(1, blurField_);
@@ -562,7 +551,7 @@ void FluidRenderer::blurDepthField(
     glUseProgram(0);
 }
 
-// 厚度平滑，横竖各一遍。和深度平滑同一个 program，只是换了输入、关掉窄范围裁剪。
+// 厚度平滑，横竖各一遍。和深度平滑同一个 program，只是换了输入纹理。
 void FluidRenderer::blurThicknessField(
     const glm::mat4& projection,
     float radius,
@@ -579,11 +568,6 @@ void FluidRenderer::blurThicknessField(
 
     glProgramUniform1f(blurProgram_, blurRadiusScaleLocation_, radiusScale);
     glProgramUniform1f(blurProgram_, blurScaleLocation_, blurScale);
-
-    // 关掉窄范围裁剪。那套非对称处理是给深度用的：它要防止把另一层流体的距离
-    // 混进来，做出不存在的表面。厚度没有这个问题——它本来就是沿视线累加的量，
-    // 跨深度断层混一点只会让吸收的过渡软一些，反而更接近真实的次表面散射。
-    glProgramUniform1i(blurProgram_, blurNarrowLocation_, GL_FALSE);
 
     glUseProgram(blurProgram_);
     glBindVertexArray(emptyVao_);
@@ -620,10 +604,11 @@ void FluidRenderer::initSurfacePass()
         // language=GLSL
             R"glsl(#version 460 core
 
-uniform sampler2D uDepthField;   // R32F，眼空间距离，0 表示这里没有流体
+uniform sampler2D uDepthField;   // R32F，视空间距离，0 表示这里没有流体
 uniform sampler2D uThickness;    // R16F，视线穿过的水的总长度，米
-uniform vec2      uProjXY;       // (proj[0][0], proj[1][1])，见 eyeFromUv
+uniform vec2      uProjXY;       // (proj[0][0], proj[1][1])，见 viewFromUv
 uniform vec3      uAbsorb;       // Beer-Lambert 吸收系数 σ，1/m，分通道
+uniform float     uNormalDepthThreshold; // 中央差分允许跨过的最大深度差，米
 
 out vec4 FragColor;
 
@@ -631,9 +616,9 @@ float depthAt(vec2 uv) {
     return texture(uDepthField, uv).r;
 }
 
-// ndc.x = proj[0][0] * eye.x / (-eye.z)
-// eye.x = ndc.x * z / proj[0][0]
-vec3 eyeFromUv(vec2 uv, float z) {
+// ndc.x = proj[0][0] * view.x / (-view.z)
+// view.x = ndc.x * z / proj[0][0]
+vec3 viewFromUv(vec2 uv, float z) {
     vec2 ndc = uv * 2.0 - 1.0;
     return vec3(ndc.x * z / uProjXY.x,
                 ndc.y * z / uProjXY.y,
@@ -645,12 +630,24 @@ vec3 tangent(vec2 uv, vec2 step, vec3 here, float z0) {
     float zm = depthAt(uv - step);
 
     if (zp <= 0.0 && zm <= 0.0) return vec3(0.0);
-    if (zm <= 0.0) return eyeFromUv(uv + step, zp) - here;
-    if (zp <= 0.0) return here - eyeFromUv(uv - step, zm);
+    if (zm <= 0.0) return viewFromUv(uv + step, zp) - here;
+    if (zp <= 0.0) return here - viewFromUv(uv - step, zm);
 
-    return abs(zp - z0) < abs(zm - z0)
-        ? eyeFromUv(uv + step, zp) - here
-        : here - eyeFromUv(uv - step, zm);
+    float deltaPlus  = abs(zp - z0);
+    float deltaMinus = abs(zm - z0);
+    float span       = abs(zp - zm);
+
+    // 左右（或上下）仍属于同一层连续水面时，优先用中央差分：它同时利用两侧，
+    // 一阶误差相消，对残留的一像素深度噪声比单侧差分稳定得多。
+    // 只有两侧真的跨过深度断层时，才退回下面的单侧差分。
+    if (span <= uNormalDepthThreshold) {
+        return 0.5 * (viewFromUv(uv + step, zp)
+                    - viewFromUv(uv - step, zm));
+    }
+
+    return deltaPlus < deltaMinus
+        ? viewFromUv(uv + step, zp) - here
+        : here - viewFromUv(uv - step, zm);
 }
 
 void main() {
@@ -660,7 +657,7 @@ void main() {
     float z = depthAt(uv);
     if (z <= 0.0) discard;
 
-    vec3 here = eyeFromUv(uv, z);
+    vec3 here = viewFromUv(uv, z);
 
     vec3 tx = tangent(uv, vec2(texel.x, 0.0), here, z);
     vec3 ty = tangent(uv, vec2(0.0, texel.y), here, z);
@@ -679,7 +676,9 @@ void main() {
 
     vec3  L    = normalize(vec3(0.5, 0.8, 0.6));
     float diff = max(dot(n, L), 0.0);
-    FragColor  = vec4(transmit * (0.25 + 0.75 * diff), 1.0);
+
+    float alpha = 1.0 - exp(-8 * thickness);
+    FragColor  = vec4(transmit * (0.25 + 0.75 * diff), alpha);
 }
 )glsl";
 
@@ -695,7 +694,10 @@ void main() {
 
     surfaceProjXYLocation_ = glGetUniformLocation(surfaceProgram_, "uProjXY");
     surfaceAbsorbLocation_ = glGetUniformLocation(surfaceProgram_, "uAbsorb");
-    if (surfaceProjXYLocation_ == -1 || surfaceAbsorbLocation_ == -1) {
+    surfaceNormalThresholdLocation_ =
+        glGetUniformLocation(surfaceProgram_, "uNormalDepthThreshold");
+    if (surfaceProjXYLocation_ == -1 || surfaceAbsorbLocation_ == -1 ||
+        surfaceNormalThresholdLocation_ == -1) {
         shutdown();
         throw std::runtime_error("Cannot find a required surface shader uniform");
     }
@@ -706,7 +708,7 @@ void main() {
 }
 
 // 读深度场和厚度场，重建法线 + Beer-Lambert，画到屏幕。
-void FluidRenderer::shadeSurface(const glm::mat4& projection)
+void FluidRenderer::shadeSurface(const glm::mat4& projection, float radius)
 {
     // 绑回 0 号帧缓冲，也就是窗口本身。不解绑的话，下一帧 main.cpp 的清屏和地板
     // 会画进 FBO 里，屏幕就再也不刷新了（症状是画面卡在第一帧）。
@@ -715,14 +717,22 @@ void FluidRenderer::shadeSurface(const glm::mat4& projection)
     // 深度测试要关。全屏三角形的 gl_Position.z 写死是 0，换算成深度值是 0.5，
     // 这个数和地板谁近谁远纯属偶然——开着深度测试会随机剔掉一部分像素。
     // 挡不挡地板是靠片元里的 discard 决定的，不靠深度。
-    // 混合也关：输出的 alpha 恒为 1，开着混合只是白花一遍带宽。
+    //
+    // 表面 shader 的 alpha 随厚度变化：轮廓越薄越接近 0。这里必须开启普通
+    // straight-alpha 混合，否则本应渐隐的薄边会以不透明暗色写入，形成一圈黑边。
     glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // eyeFromUv 反投影只需要这两个矩阵元素。glm 是列主序，projection[列][行]，
+    // viewFromUv 反投影只需要这两个矩阵元素。glm 是列主序，projection[列][行]，
     // 所以 [0][0] 和 [1][1] 就是对角线上的那两项。
     glProgramUniform2f(surfaceProgram_, surfaceProjXYLocation_,
                        projection[0][0], projection[1][1]);
+
+    // 两侧深度差不超过两个范围标准差时，把它们视为同一层连续表面并使用中央差分。
+    // 当前默认是 2·4r = 8r；真正的前后层断层通常远大于这个值。
+    glProgramUniform1f(surfaceProgram_, surfaceNormalThresholdLocation_,
+                       2.0f * sigmaRange * radius);
 
     // σ = absorbScale · (0.45, 0.074, 0.02)，括号里是真实水的吸收系数 (1/m)。
     // 红光被吸收得比蓝光强 22 倍，这就是水呈蓝绿色的来源。
@@ -802,8 +812,6 @@ void FluidRenderer::shutdown()
     blurDirectionLocation_   = -1;
     blurRadiusScaleLocation_ = -1;
     blurScaleLocation_       = -1;
-    blurNarrowRangeLocation_ = -1;
-    blurNarrowLocation_      = -1;
 
     if (depthBuffer_ != 0) {
         glDeleteRenderbuffers(1, &depthBuffer_);
@@ -829,6 +837,7 @@ void FluidRenderer::shutdown()
     }
 
     surfaceProjXYLocation_ = -1;
+    surfaceNormalThresholdLocation_ = -1;
 
     viewLocation_ = -1;
     projectionLocation_ = -1;

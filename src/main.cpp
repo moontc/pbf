@@ -210,7 +210,7 @@ int main() {
             floor.render(camera.projection() * camera.view());
             //particles.render(solver.positions(), camera.view(), camera.projection());
             fluid.render(solver.positions(), camera.view(), camera.projection(),
-                         solver.params().d * 0.65f, fbW, fbH);
+                         solver.params().d * 0.7f, fbW, fbH);
 
             profiler.afterRender();
 
