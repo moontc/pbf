@@ -92,6 +92,8 @@ add_executable(pbf src/main.cpp
         src/rendering/glsl_program.h
         src/rendering/floor.cpp
         src/rendering/floor.h
+        src/rendering/sky.cpp
+        src/rendering/sky.h
         src/frame_profiler.h
         src/rendering/fluid_renderer.cpp
         src/rendering/fluid_renderer.h)

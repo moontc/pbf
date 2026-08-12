@@ -17,6 +17,7 @@
 #include "rendering/camera.h"
 #include "rendering/particle_renderer.h"
 #include "rendering/floor.h"
+#include "rendering/sky.h"
 #include "frame_profiler.h"
 #include "vector.h"
 #include "solvers/pbf_solver.h"
@@ -161,6 +162,7 @@ int main() {
         ParticleRenderer particles(solver.count());
         FluidRenderer fluid(solver.count());
         Floor floor(params.boxLo, params.boxHi);
+        Sky sky;
 
         const float FIXED_DT  = 1.0f / 60.0f;
         const int   MAX_STEPS = 5;
@@ -201,12 +203,14 @@ int main() {
             glfwGetFramebufferSize(window, &width, &height);
 
             glViewport(0, 0, width, height);
+
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             int fbW, fbH;
             glfwGetFramebufferSize(window, &fbW, &fbH);
 
+            sky.render(camera.view(), camera.projection());
             floor.render(camera.projection() * camera.view());
             //particles.render(solver.positions(), camera.view(), camera.projection());
             fluid.render(solver.positions(), camera.view(), camera.projection(),

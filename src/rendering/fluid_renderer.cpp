@@ -10,6 +10,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "glsl_program.h"
+#include "sky.h"                   // kEnvironmentGlsl，和背景共用的天空定义
 
 namespace {
 
@@ -414,15 +415,6 @@ void FluidRenderer::drawThicknessField(
 // 深度平滑，同时也是厚度平滑用的那个 program
 void FluidRenderer::initBlurPass()
 {
-    // 可分离高斯，横竖各一遍。深度场和厚度场用同一份代码，只换输入纹理。
-    //
-    // 权重里**没有**任何依赖 z 的项，这是刻意的。二维高斯之所以能拆成两个一维
-    // 高斯，前提是 G(x,y) = G(x)·G(y)，即权重只由偏移决定。一旦权重里掺进
-    // 逐像素的深度（双边的范围项、窄范围滤波的丢弃/夹取），可分离性就不成立，
-    // 横一遍的误差会被竖一遍沿另一个方向拉长，屏幕上表现为轴向的竖条纹。
-    //
-    // 唯一保留的深度相关判断是 `zi <= 0`（空白），它是二值的、且轮廓两侧一致，
-    // 不引入方向性偏置。
     constexpr char kFragmentShader[] =
         // language=GLSL
             R"glsl(#version 460 core
@@ -514,7 +506,7 @@ void main() {
     glProgramUniform1i(blurProgram_, glGetUniformLocation(blurProgram_, "uDepth"), 1);
 }
 
-// 深度平滑，横竖各一遍。
+// 深度平滑
 void FluidRenderer::blurDepthField(
     const glm::mat4& projection,
     float radius,
@@ -614,7 +606,7 @@ void FluidRenderer::blurThicknessField(
 // 表面着色
 void FluidRenderer::initSurfacePass()
 {
-    constexpr char kFragmentShader[] =
+    constexpr char kFragmentHead[] =
         // language=GLSL
             R"glsl(#version 460 core
 
@@ -636,33 +628,14 @@ const float kEta = 1.333;
 // F₀ = ((η₁ - η₂) / (η₁ + η₂))² = ((1 - 1.333) / (1 + 1.333))² ≈ 0.02
 const float kF0 = 0.02;
 
-// 世界空间的太阳方向
-const vec3 kSunDir = normalize(vec3(0.4, 0.75, 0.5));
-
 float depthAt(vec2 uv) {
     return texture(uDepthField, uv).r;
 }
+)glsl";
 
-// 场景里没有环境贴图，这里用一个解析的替身。
-vec3 environment(vec3 dir) {
-    const vec3 kZenith  = vec3(0.10);
-    const vec3 kHorizon = vec3(0.38);
-    const vec3 kGround  = vec3(0.72);
-
-    float t = clamp(dir.y, -1.0, 1.0);
-
-    // sqrt 让颜色在地平线附近变化最快，远离地平线后趋于平缓
-    vec3 env = t > 0.0
-        ? mix(kHorizon, kZenith, sqrt(t))
-        : mix(kHorizon, kGround, sqrt(-t));
-
-    // 太阳。指数 900 对应约 2.2° 的半亮角半径，强度 60 使得它在 F₀ = 0.02
-    // 的正对入射下仍然能过曝成白点（60 × 0.02 = 1.2）。
-    env += vec3(1.0, 0.97, 0.92) * pow(max(dot(dir, kSunDir), 0.0), 900.0) * 60.0;
-
-    return env;
-}
-
+    constexpr char kFragmentBody[] =
+        // language=GLSL
+            R"glsl(
 // ndc.x = proj[0][0] * view.x / (-view.z)
 // view.x = ndc.x * z / proj[0][0]
 vec3 viewFromUv(vec2 uv, float z) {
@@ -744,9 +717,12 @@ void main() {
 }
 )glsl";
 
+    const std::string fragmentSource =
+        std::string(kFragmentHead) + kEnvironmentGlsl + kFragmentBody;
+
     surfaceProgram_ = buildGlslProgram(
         kFullscreenVertexShader,
-        kFragmentShader,
+        fragmentSource.c_str(),
         "fluid surface shader"
     );
     if (surfaceProgram_ == 0) {

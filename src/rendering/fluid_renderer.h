@@ -103,26 +103,18 @@ private:
     std::size_t particleCapacity_ = 0;
 
 public:
-    // 可调参数，以"粒子半径"为单位
-    float blurScale   = 3.0f;   // 空间标准差 σ_s 对应的滤波半径 = 几倍粒子半径
+    // 空间标准差 σ_s 对应的滤波半径，以"粒子半径"为单位
+    float blurScale   = 3.0f;
 
     // 法线重建时判定"这两侧是不是同一层水面"的深度差阈值，单位是粒子半径。
-    // shadeSurface 传给 shader 的是 2 · sigmaRange · r。
-    //
-    // 曾经它还兼任平滑的范围标准差 σ_r（双边 / 窄范围滤波），现在不是了：平滑退回
-    // 了纯高斯，权重里不含任何依赖 z 的项。原因见 initBlurPass 顶部的注释。
+    // uNormalDepthThreshold = 2 · sigmaRange · r。
     float sigmaRange  = 4.0f;
 
     // Beer-Lambert 吸收系数的夸大倍数。
-    //
-    // shader 里用的是 σ = absorbScale · (0.45, 0.074, 0.02)，括号里是真实水的
-    // 吸收系数 (1/m)。absorbScale = 1 就是物理真值，但在 0.5 m 的水体里
-    // exp(-0.45·0.5) = 0.80，几乎看不出颜色——真实的水要几米深才明显发蓝。
-    // 所以这里刻意放大，用小尺度演示大尺度的现象。
-    float absorbScale = 8.0f;
+    // σ = absorbScale · (0.45, 0.074, 0.02)
+    float absorbScale = 2.0f;
 
-    // 折射错位量的人为倍数。1 = 着色器里推出来的物理值
-    //     Δuv = (1 - 1/η) · thickness · n.xy · (p₀₀, p₁₁) / (2z)
-    // 调大 → 水下的东西扭曲更夸张；调 0 → 只剩反射和吸收，背景不再变形。
+    // 折射错位量的人为倍数
+    // Δuv = (1 - 1/η) · thickness · -n.xy · (p₀₀, p₁₁) / (2z)
     float refractScale = 1.0f;
 };
