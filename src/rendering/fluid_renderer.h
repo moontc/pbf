@@ -47,14 +47,13 @@ private:
     void blurDepthField(const glm::mat4& projection, float radius,
                         int viewportWidth, int viewportHeight);
 
-    // 必须排在 blurDepthField 之后：它的滤波半径要用已经平滑好的深度。
     void blurThicknessField(const glm::mat4& projection, float radius,
                             int viewportWidth, int viewportHeight);
 
 
     void shadeSurface(const glm::mat4& view, const glm::mat4& projection, float radius);
 
-    // 深度场：到流体表面的视空间距离，没有流体的地方是 0。
+    // 深度场：到流体表面的视空间距离，没有流体的地方是 0
     GLuint depthProgram_ = 0;
     GLuint depthVao_ = 0;
     GLuint depthVbo_ = 0;
@@ -69,7 +68,7 @@ private:
     int    targetWidth_ = 0;
     int    targetHeight_ = 0;
 
-    // 厚度场：视线在水里走过的总长度，米。Beer-Lambert 的 d 就是它。
+    // 厚度场：视线在水里走过的总长度，米
     GLuint thicknessFbo_ = 0;
     GLuint thicknessField_ = 0;
     GLuint thicknessProgram_ = 0;
@@ -78,7 +77,7 @@ private:
     GLint  thickRadiusLocation_ = -1;
     GLint  thickViewportHLocation_ = -1;
 
-    // 可分离高斯，深度场和厚度场都是横竖各一遍，共用同一个 program。
+    // 可分离高斯，深度场和厚度场共用同一个 program
     GLuint blurFbo_ = 0;
     GLuint blurField_ = 0;
     GLuint blurProgram_ = 0;

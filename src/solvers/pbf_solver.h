@@ -270,7 +270,7 @@ private:
     }
 
     void applyVorticity(float dt) {
-        if (m_p.vorticity <= 0.0f) return;      // ★ 关闭时直接返回，别白跑
+        if (m_p.vorticity <= 0.0f) return;
         const int n = count();
 
         // 公式 15

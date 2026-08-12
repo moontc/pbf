@@ -148,8 +148,8 @@ int main() {
 
     PbfParams params;
 
-    //PbfSolver solver(params);
-    CudaPbfSolver solver(params);
+    PbfSolver solver(params);
+    //CudaPbfSolver solver(params);
 
     solver.initBlock(blockLo, blockHi);
 
@@ -165,7 +165,6 @@ int main() {
         Sky sky;
 
         const float FIXED_DT  = 1.0f / 60.0f;
-        const int   MAX_STEPS = 5;
         float  accumulator = 0.0f;
         double lastFrameTime = glfwGetTime();
 
@@ -180,24 +179,17 @@ int main() {
             }
 
             const double currentTime = glfwGetTime();
-            float real_dt = static_cast<float>(currentTime - lastFrameTime);
+            accumulator += static_cast<float>(currentTime - lastFrameTime);
             lastFrameTime = currentTime;
-
-            real_dt = std::min(real_dt, 0.025f);
-
-            accumulator += real_dt;
 
             profiler.frameStart();
 
-            int steps = 0;
-            while (accumulator >= FIXED_DT && steps < MAX_STEPS) {
+            if (accumulator >= FIXED_DT) {
                 solver.step(FIXED_DT);
-                accumulator -= FIXED_DT;
-                ++steps;
+                accumulator = std::fmod(accumulator, FIXED_DT);
             }
-            if (steps == MAX_STEPS) accumulator = 0.0f;
 
-            profiler.afterSolve(steps);
+            profiler.afterSolve();
 
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
