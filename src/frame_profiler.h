@@ -15,10 +15,11 @@ public:
         if (enabled_) t0_ = Clock::now();
     }
 
-    void afterSolve()
+    void afterSolve(int steps)
     {
         if (!enabled_) return;
         t1_ = Clock::now();
+        steps_ += steps;
     }
 
     void afterRender()
@@ -42,17 +43,18 @@ public:
         const double n = static_cast<double>(frames_);
         const double total = solve_ + render_ + swap_;
 
-        std::printf("%7d particles | solve %6.2f | render %6.2f "
+        const double solvePerStep = steps_ > 0 ? solve_ / steps_ : 0.0;
+
+        std::printf("%7d particles | solve/frame %6.2f | solver/step %6.2f | render %6.2f "
                     "| swap %6.2f | total %6.2f ms = %5.1f fps\n",
-                    particleCount, solve_ / n,
+                    particleCount, solve_ / n, solvePerStep,
                     render_ / n, swap_ / n,
                     total / n, 1000.0 * n / total);
 
         // 主动刷新缓冲区
         std::fflush(stdout);
 
-        solve_ = render_ = swap_ = 0.0;
-        frames_ = 0;
+        solve_ = render_ = swap_= frames_ = steps_ = 0;
     }
 
 private:
@@ -70,6 +72,7 @@ private:
 
     double solve_  = 0.0;
     double render_ = 0.0;
+    int steps_ = 0;
     double swap_   = 0.0;
     int    frames_ = 0;
 };

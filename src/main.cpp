@@ -24,6 +24,13 @@
 #include "solvers/cuda_pbf_solver.cuh"
 #include "rendering/fluid_renderer.h"
 
+#if defined(_WIN32)
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 namespace {
 
 GLFWwindow* initOpenGL() {
@@ -148,8 +155,8 @@ int main() {
 
     PbfParams params;
 
-    PbfSolver solver(params);
-    //CudaPbfSolver solver(params);
+    //PbfSolver solver(params);
+    CudaPbfSolver solver(params);
 
     solver.initBlock(blockLo, blockHi);
 
@@ -182,14 +189,16 @@ int main() {
             accumulator += static_cast<float>(currentTime - lastFrameTime);
             lastFrameTime = currentTime;
 
+            int steps = 0;
             profiler.frameStart();
 
             if (accumulator >= FIXED_DT) {
                 solver.step(FIXED_DT);
                 accumulator = std::fmod(accumulator, FIXED_DT);
+                steps = 1;
             }
 
-            profiler.afterSolve();
+            profiler.afterSolve(steps);
 
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
