@@ -5,6 +5,8 @@
 #include <string>
 #include <type_traits>
 
+#include <glm/mat3x3.hpp>
+#include <glm/matrix.hpp>          // glm::transpose
 #include <glm/gtc/type_ptr.hpp>
 
 #include "glsl_program.h"
@@ -105,6 +107,7 @@ void FluidRenderer::ensureTarget(int width, int height)
     if (depthField_ != 0)  { glDeleteTextures(1, &depthField_); depthField_ = 0; }
     if (blurField_ != 0)   { glDeleteTextures(1, &blurField_); blurField_ = 0; }
     if (thicknessField_ != 0) { glDeleteTextures(1, &thicknessField_); thicknessField_ = 0; }
+    if (backgroundField_ != 0) { glDeleteTextures(1, &backgroundField_); backgroundField_ = 0; }
     if (thicknessFbo_ == 0)   { glCreateFramebuffers(1, &thicknessFbo_); }
     if (depthBuffer_ != 0) { glDeleteRenderbuffers(1, &depthBuffer_); depthBuffer_ = 0; }
     if (fbo_ == 0)         { glCreateFramebuffers(1, &fbo_); }
@@ -148,6 +151,18 @@ void FluidRenderer::ensureTarget(int width, int height)
     glTextureParameteri(thicknessField_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTextureParameteri(thicknessField_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glNamedFramebufferTexture(thicknessFbo_, GL_COLOR_ATTACHMENT0, thicknessField_, 0);
+
+    // 背景：折射前把后台缓冲整幅拷进来的地方，格式跟着窗口走，所以是 RGBA8。
+    // 这张不挂到任何 FBO 上——它只被 glCopyTextureSubImage2D 写、被着色器读。
+    //
+    // 这里用 LINEAR 而不是别处的 NEAREST：折射的采样位置 uv + Δuv 是连续的，
+    // 落在 texel 之间才是常态，NEAREST 会把平滑的错位量化成阶梯状的锯齿。
+    glCreateTextures(GL_TEXTURE_2D, 1, &backgroundField_);
+    glTextureStorage2D(backgroundField_, 1, GL_RGBA8, width, height);
+    glTextureParameteri(backgroundField_, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(backgroundField_, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(backgroundField_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(backgroundField_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     if (glCheckNamedFramebufferStatus(thicknessFbo_, GL_FRAMEBUFFER)
             != GL_FRAMEBUFFER_COMPLETE) {
@@ -193,7 +208,7 @@ void FluidRenderer::render(
     // 顺序不能换：厚度平滑的半径和空白判断都读 depthField_，要的是上一行平滑
     // 之后的版本；而且它借用 blurField_ 当中转，那张纹理得等深度平滑用完。
     blurThicknessField(projection, radius, viewportWidth, viewportHeight);
-    shadeSurface(projection, radius);
+    shadeSurface(view, projection, radius);
 
     // 把 GL 状态恢复成 main.cpp 在初始化时设定的那一套。上面的 pass 改过
     // 深度测试、深度写和混合，不恢复的话下一帧的地板 pass 会用错的状态画。
@@ -599,21 +614,53 @@ void FluidRenderer::blurThicknessField(
 // 表面着色
 void FluidRenderer::initSurfacePass()
 {
-    // 从深度场重建表面法线，然后打光
     constexpr char kFragmentShader[] =
         // language=GLSL
             R"glsl(#version 460 core
 
 uniform sampler2D uDepthField;   // R32F，视空间距离，0 表示这里没有流体
 uniform sampler2D uThickness;    // R16F，视线穿过的水的总长度，米
-uniform vec2      uProjXY;       // (proj[0][0], proj[1][1])，见 viewFromUv
+uniform sampler2D uBackground;   // 画水之前的屏幕内容
+uniform vec2      uProjXY;       // (proj[0][0], proj[1][1])
 uniform vec3      uAbsorb;       // Beer-Lambert 吸收系数 σ，1/m，分通道
 uniform float     uNormalDepthThreshold; // 中央差分允许跨过的最大深度差，米
+uniform mat3      uInvViewRot;   // 视空间方向 -> 世界方向，即 view 旋转部分的转置
+uniform float     uRefract;      // 折射错位的人为倍数，1 = 按下面推导出的物理值
 
 out vec4 FragColor;
 
+// 空气 -> 水的折射率
+const float kEta = 1.333;
+
+// 垂直入射时的菲涅耳反射率
+// F₀ = ((η₁ - η₂) / (η₁ + η₂))² = ((1 - 1.333) / (1 + 1.333))² ≈ 0.02
+const float kF0 = 0.02;
+
+// 世界空间的太阳方向
+const vec3 kSunDir = normalize(vec3(0.4, 0.75, 0.5));
+
 float depthAt(vec2 uv) {
     return texture(uDepthField, uv).r;
+}
+
+// 场景里没有环境贴图，这里用一个解析的替身。
+vec3 environment(vec3 dir) {
+    const vec3 kZenith  = vec3(0.10);
+    const vec3 kHorizon = vec3(0.38);
+    const vec3 kGround  = vec3(0.72);
+
+    float t = clamp(dir.y, -1.0, 1.0);
+
+    // sqrt 让颜色在地平线附近变化最快，远离地平线后趋于平缓
+    vec3 env = t > 0.0
+        ? mix(kHorizon, kZenith, sqrt(t))
+        : mix(kHorizon, kGround, sqrt(-t));
+
+    // 太阳。指数 900 对应约 2.2° 的半亮角半径，强度 60 使得它在 F₀ = 0.02
+    // 的正对入射下仍然能过曝成白点（60 × 0.02 = 1.2）。
+    env += vec3(1.0, 0.97, 0.92) * pow(max(dot(dir, kSunDir), 0.0), 900.0) * 60.0;
+
+    return env;
 }
 
 // ndc.x = proj[0][0] * view.x / (-view.z)
@@ -637,9 +684,6 @@ vec3 tangent(vec2 uv, vec2 step, vec3 here, float z0) {
     float deltaMinus = abs(zm - z0);
     float span       = abs(zp - zm);
 
-    // 左右（或上下）仍属于同一层连续水面时，优先用中央差分：它同时利用两侧，
-    // 一阶误差相消，对残留的一像素深度噪声比单侧差分稳定得多。
-    // 只有两侧真的跨过深度断层时，才退回下面的单侧差分。
     if (span <= uNormalDepthThreshold) {
         return 0.5 * (viewFromUv(uv + step, zp)
                     - viewFromUv(uv - step, zm));
@@ -666,19 +710,37 @@ void main() {
     n = dot(n, n) > 1e-18 ? normalize(n) : vec3(0.0, 0.0, 1.0);
     if (n.z < 0.0) n = -n;
 
-    // Beer-Lambert：光穿过吸收介质，强度按路径长度指数衰减
-    //     I(d) = I₀ · exp(-σ · d)
-    // σ 分通道，水对红光的吸收远强于蓝光——**这才是水呈蓝绿色的原因**，不是因为
-    // 它反射蓝光。所以这里不再乘任何人为的蓝色调，蓝绿是算出来的：薄处
-    // exp(0) = 1 出射接近白色，厚处红光先被吃掉，剩下青蓝。
     float thickness = texture(uThickness, uv).r;
-    vec3  transmit  = exp(-uAbsorb * thickness);
 
-    vec3  L    = normalize(vec3(0.5, 0.8, 0.6));
-    float diff = max(dot(n, L), 0.0);
+    // 视线方向
+    vec3  v        = normalize(here);
+    float cosTheta = clamp(dot(n, -v), 0.0, 1.0);
 
-    float alpha = 1.0 - exp(-8 * thickness);
-    FragColor  = vec4(transmit * (0.25 + 0.75 * diff), alpha);
+    // 折射：错位采样背景
+    // 屏幕空间小角度近似：把视线近似为视空间 Z 轴，则单位法线 n 的
+    // |n.xy| = sinθ，方向也由 n.xy 给出。由 Snell 定律近似折射横移，再将其投影为
+    // UV 偏移：Δuv ≈ (1 - 1/η) · thickness · n.xy · (p₀₀,p₁₁) / (2z)。
+    vec2 duv = (1.0 - 1.0 / kEta) * thickness * -n.xy * uProjXY / (2.0 * z);
+
+    // 夹住偏移量：轮廓上法线几乎垂直于视线，Δuv 会大到把屏幕另一头的东西拉过来。
+    duv = clamp(duv * uRefract, vec2(-0.15), vec2(0.15));
+
+    vec3 behind = texture(uBackground, clamp(uv + duv, vec2(0.0), vec2(1.0))).rgb;
+
+    // Beer-Lambert：光穿过吸收介质，强度按路径长度指数衰减
+    // I(d) = I₀ · exp(-σ · d)
+    // σ 为三个通道的吸收系数
+    vec3 refracted = behind * exp(-uAbsorb * thickness);
+
+    // 反射
+    // reflect(v, n) = v - 2·dot(v, n)·n，v 射入、n 朝外，得到镜面方向。
+    vec3 reflected = environment(uInvViewRot * reflect(v, n));
+
+    // 菲涅耳
+    // Schlick 近似  F(θ) = F₀ + (1 - F₀)(1 - cosθ)⁵
+    float fresnel = kF0 + (1.0 - kF0) * pow(1.0 - cosTheta, 5.0);
+
+    FragColor = vec4(mix(refracted, reflected, fresnel), 1.0);
 }
 )glsl";
 
@@ -696,38 +758,60 @@ void main() {
     surfaceAbsorbLocation_ = glGetUniformLocation(surfaceProgram_, "uAbsorb");
     surfaceNormalThresholdLocation_ =
         glGetUniformLocation(surfaceProgram_, "uNormalDepthThreshold");
+    surfaceInvViewRotLocation_ = glGetUniformLocation(surfaceProgram_, "uInvViewRot");
+    surfaceRefractLocation_    = glGetUniformLocation(surfaceProgram_, "uRefract");
     if (surfaceProjXYLocation_ == -1 || surfaceAbsorbLocation_ == -1 ||
-        surfaceNormalThresholdLocation_ == -1) {
+        surfaceNormalThresholdLocation_ == -1 ||
+        surfaceInvViewRotLocation_ == -1 || surfaceRefractLocation_ == -1) {
         shutdown();
         throw std::runtime_error("Cannot find a required surface shader uniform");
     }
 
-    // 两个 sampler 分别去 0 号和 1 号纹理单元取数据
+    // 三个 sampler 分别去 0、1、2 号纹理单元取数据
     glProgramUniform1i(surfaceProgram_, glGetUniformLocation(surfaceProgram_, "uDepthField"), 0);
     glProgramUniform1i(surfaceProgram_, glGetUniformLocation(surfaceProgram_, "uThickness"), 1);
+    glProgramUniform1i(surfaceProgram_, glGetUniformLocation(surfaceProgram_, "uBackground"), 2);
 }
 
-// 读深度场和厚度场，重建法线 + Beer-Lambert，画到屏幕。
-void FluidRenderer::shadeSurface(const glm::mat4& projection, float radius)
+// 读深度场和厚度场，重建法线 + 折射/反射/菲涅耳，画到屏幕。
+void FluidRenderer::shadeSurface(const glm::mat4& view, const glm::mat4& projection,
+                                 float radius)
 {
     // 绑回 0 号帧缓冲，也就是窗口本身。不解绑的话，下一帧 main.cpp 的清屏和地板
     // 会画进 FBO 里，屏幕就再也不刷新了（症状是画面卡在第一帧）。
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    // 折射要读"水后面是什么"，但那正是此刻屏幕上已有的内容（main.cpp 清过屏、
+    // 地板也画完了，水还没画）。所以先把后台缓冲整幅拷进一张纹理。
+    //
+    // glCopyTextureSubImage2D 的源是当前绑定的 GL_READ_FRAMEBUFFER；上面那句
+    // glBindFramebuffer(GL_FRAMEBUFFER, 0) 同时设置了 read 和 draw，所以这里读
+    // 到的就是窗口。拷贝先于本 pass 的绘制发生，而且写的目标是窗口、读的是纹理，
+    // 不构成反馈回路。
+    glCopyTextureSubImage2D(backgroundField_, 0, 0, 0, 0, 0,
+                            targetWidth_, targetHeight_);
+
     // 深度测试要关。全屏三角形的 gl_Position.z 写死是 0，换算成深度值是 0.5，
     // 这个数和地板谁近谁远纯属偶然——开着深度测试会随机剔掉一部分像素。
     // 挡不挡地板是靠片元里的 discard 决定的，不靠深度。
     //
-    // 表面 shader 的 alpha 随厚度变化：轮廓越薄越接近 0。这里必须开启普通
-    // straight-alpha 混合，否则本应渐隐的薄边会以不透明暗色写入，形成一圈黑边。
+    // 混合也关掉：背景现在由折射项自己采样，输出的 alpha 恒为 1，交给硬件混合
+    // 只会把已经算好的结果再和背景混一遍。
     glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
 
     // viewFromUv 反投影只需要这两个矩阵元素。glm 是列主序，projection[列][行]，
     // 所以 [0][0] 和 [1][1] 就是对角线上的那两项。
     glProgramUniform2f(surfaceProgram_, surfaceProjXYLocation_,
                        projection[0][0], projection[1][1]);
+
+    // environment() 是世界空间的函数，而法线和反射方向都在视空间。view 的左上
+    // 3×3 是纯旋转（轨道相机没有缩放），所以它的逆就是转置，不必求逆矩阵。
+    const glm::mat3 invViewRot = glm::transpose(glm::mat3(view));
+    glProgramUniformMatrix3fv(surfaceProgram_, surfaceInvViewRotLocation_,
+                              1, GL_FALSE, &invViewRot[0][0]);
+
+    glProgramUniform1f(surfaceProgram_, surfaceRefractLocation_, refractScale);
 
     // 两侧深度差不超过两个范围标准差时，把它们视为同一层连续表面并使用中央差分。
     // 当前默认是 2·4r = 8r；真正的前后层断层通常远大于这个值。
@@ -742,8 +826,9 @@ void FluidRenderer::shadeSurface(const glm::mat4& projection, float radius)
                        absorbScale * 0.02f);
 
     glUseProgram(surfaceProgram_);
-    glBindTextureUnit(0, depthField_);       // 0 号纹理单元 = uDepthField
-    glBindTextureUnit(1, thicknessField_);   // 1 号纹理单元 = uThickness
+    glBindTextureUnit(0, depthField_);        // 0 号纹理单元 = uDepthField
+    glBindTextureUnit(1, thicknessField_);    // 1 号纹理单元 = uThickness
+    glBindTextureUnit(2, backgroundField_);   // 2 号纹理单元 = uBackground
     glBindVertexArray(emptyVao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);        // 三个顶点，全屏三角形
 
@@ -781,6 +866,11 @@ void FluidRenderer::shutdown()
     if (thicknessField_ != 0) {
         glDeleteTextures(1, &thicknessField_);
         thicknessField_ = 0;
+    }
+
+    if (backgroundField_ != 0) {
+        glDeleteTextures(1, &backgroundField_);
+        backgroundField_ = 0;
     }
 
     if (thicknessFbo_ != 0) {
@@ -836,7 +926,9 @@ void FluidRenderer::shutdown()
         surfaceProgram_ = 0;
     }
 
-    surfaceProjXYLocation_ = -1;
+    surfaceProjXYLocation_          = -1;
+    surfaceInvViewRotLocation_      = -1;
+    surfaceRefractLocation_         = -1;
     surfaceNormalThresholdLocation_ = -1;
 
     viewLocation_ = -1;

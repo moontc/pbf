@@ -51,7 +51,8 @@ private:
     void blurThicknessField(const glm::mat4& projection, float radius,
                             int viewportWidth, int viewportHeight);
 
-    void shadeSurface(const glm::mat4& projection, float radius);
+
+    void shadeSurface(const glm::mat4& view, const glm::mat4& projection, float radius);
 
     // 深度场：到流体表面的视空间距离，没有流体的地方是 0。
     GLuint depthProgram_ = 0;
@@ -85,13 +86,19 @@ private:
     GLint  blurRadiusScaleLocation_ = -1;
     GLint  blurScaleLocation_ = -1;
 
-    // 表面着色：读平滑后的深度场和厚度场，重建法线 + Beer-Lambert，画到屏幕。
+    // 背景：画水之前的整幅屏幕内容，折射用它当被错位采样的对象。
+    // 不挂 FBO，只被 glCopyTextureSubImage2D 写、被表面着色器读。
+    GLuint backgroundField_ = 0;
+
+    // 表面着色：读平滑后的深度场、厚度场和背景，重建法线 + 折射/反射/菲涅耳。
     // emptyVao_ 给全屏三角形用——核心 profile 下没绑 VAO 的 glDrawArrays 什么都不画。
     GLuint surfaceProgram_ = 0;
     GLuint emptyVao_ = 0;
     GLint  surfaceProjXYLocation_ = -1;
     GLint  surfaceAbsorbLocation_ = -1;
     GLint  surfaceNormalThresholdLocation_ = -1;
+    GLint  surfaceInvViewRotLocation_ = -1;
+    GLint  surfaceRefractLocation_ = -1;
 
     std::size_t particleCapacity_ = 0;
 
@@ -113,4 +120,9 @@ public:
     // exp(-0.45·0.5) = 0.80，几乎看不出颜色——真实的水要几米深才明显发蓝。
     // 所以这里刻意放大，用小尺度演示大尺度的现象。
     float absorbScale = 8.0f;
+
+    // 折射错位量的人为倍数。1 = 着色器里推出来的物理值
+    //     Δuv = (1 - 1/η) · thickness · n.xy · (p₀₀, p₁₁) / (2z)
+    // 调大 → 水下的东西扭曲更夸张；调 0 → 只剩反射和吸收，背景不再变形。
+    float refractScale = 1.0f;
 };
