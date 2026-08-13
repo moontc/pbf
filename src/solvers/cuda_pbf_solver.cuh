@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "pbf_solver.h"
+#include "pbf_types.h"
 #include "../vector.h"
 
 class CudaPbfSolver final {

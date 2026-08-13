@@ -58,6 +58,7 @@ add_library(pbf_solver STATIC
         src/solvers/cuda_pbf_solver.cu
         src/solvers/cuda_pbf_solver.cuh
         src/solvers/pbf_solver.h
+        src/solvers/pbf_types.h
         src/vector.h)
 
 target_include_directories(pbf_solver PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
