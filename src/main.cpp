@@ -13,6 +13,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cuda_runtime.h>
+#include <cuda_gl_interop.h>
 
 #include "rendering/camera.h"
 #include "rendering/particle_renderer.h"
@@ -90,15 +91,29 @@ GLFWwindow* initOpenGL() {
 }
 
 bool initCUDA() {
-    int device = 0;
-    cudaError_t error = cudaGetDevice(&device);
+    unsigned int deviceCount = 0;
+    int devices[8]{};
+    cudaError_t error = cudaGLGetDevices(&deviceCount, devices, 8,
+                                         cudaGLDeviceListAll);
 
     if (error != cudaSuccess) {
         std::fprintf(
             stderr,
-            "cudaGetDevice failed: %s\n",
+            "cudaGLGetDevices failed: %s\n",
             cudaGetErrorString(error)
         );
+        return false;
+    }
+    if (deviceCount == 0) {
+        std::fprintf(stderr, "OpenGL context is not associated with a CUDA device\n");
+        return false;
+    }
+
+    const int device = devices[0];
+    error = cudaSetDevice(device);
+    if (error != cudaSuccess) {
+        std::fprintf(stderr, "cudaSetDevice failed: %s\n",
+                     cudaGetErrorString(error));
         return false;
     }
 
@@ -162,6 +177,7 @@ int main() {
 
         ParticleRenderer particles(solver.count());
         FluidRenderer fluid(solver.count());
+        fluid.updatePositions(solver);
         Floor floor(params.boxLo, params.boxHi);
         Sky sky;
 
@@ -188,10 +204,11 @@ int main() {
 
             if (accumulator >= FIXED_DT) {
                 solver.step(FIXED_DT);
+                fluid.updatePositions(solver);
                 accumulator = std::fmod(accumulator, FIXED_DT);
                 steps = 1;
             }
-
+            cudaDeviceSynchronize();
             profiler.afterSolve(steps);
 
             int width, height;
@@ -208,7 +225,7 @@ int main() {
             sky.render(camera.view(), camera.projection());
             floor.render(camera.projection() * camera.view());
             //particles.render(solver.positions(), camera.view(), camera.projection());
-            fluid.render(solver.positions(), camera.view(), camera.projection(),
+            fluid.render(camera.view(), camera.projection(),
                          solver.params().d * 0.7f, fbW, fbH);
 
             profiler.afterRender();

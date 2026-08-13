@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 #include "pbf_types.h"
@@ -21,9 +22,11 @@ public:
     int count() const { return m_n; }
     const PbfParams& params() const { return m_p; }
 
-    // Refreshed once at the end of each step().
-    const std::vector<Vec3>& positions() const { return m_hostX; }
+    const std::vector<Vec3>& positions() const;
     const PbfStats& stats() const { return m_stats; }
+
+    void copyPositionsToDevice(Vec3* destination,
+                               std::size_t destinationCount) const;
 
     // Validation hooks.  Not used by the render loop; they exist so the GPU
     // state can be diffed against the CPU solver's.  Each one synchronises.
@@ -85,6 +88,7 @@ private:
 
     void*  d_stats     = nullptr;
 
-    std::vector<Vec3> m_hostX;
+    mutable std::vector<Vec3> m_hostX;
+    mutable bool m_hostPositionsDirty = false;
     PbfStats m_stats;
 };

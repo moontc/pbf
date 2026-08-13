@@ -541,6 +541,7 @@ void CudaPbfSolver::initBlock()
 
     CUDA_CHECK(cudaMemcpy(d_x, m_hostX.data(),
                           sizeof(Vec3) * m_n, cudaMemcpyHostToDevice));
+    m_hostPositionsDirty = false;
 }
 
 void CudaPbfSolver::allocate()
@@ -731,12 +732,34 @@ void CudaPbfSolver::step(float dtFrame)
         m_stats = PbfStats();
     }
 
-    const int blocks = gridFor(m_n);
-    kScatterVec3ById<<<blocks, kBlock>>>(d_x, d_id, d_xTmp, m_n);
+    m_hostPositionsDirty = true;
+}
+
+const std::vector<Vec3>& CudaPbfSolver::positions() const
+{
+    if (!m_hostPositionsDirty) return m_hostX;
+
+    kScatterVec3ById<<<gridFor(m_n), kBlock>>>(d_x, d_id, d_xTmp, m_n);
     CUDA_CHECK_LAUNCH();
 
     CUDA_CHECK(cudaMemcpy(m_hostX.data(), d_xTmp,
                           sizeof(Vec3) * m_n, cudaMemcpyDeviceToHost));
+    m_hostPositionsDirty = false;
+    return m_hostX;
+}
+
+void CudaPbfSolver::copyPositionsToDevice(Vec3* destination,
+                                          std::size_t destinationCount) const
+{
+    if (destination == nullptr) {
+        throw std::invalid_argument("CUDA position destination is null");
+    }
+    if (destinationCount < static_cast<std::size_t>(m_n)) {
+        throw std::invalid_argument("CUDA position destination is too small");
+    }
+
+    CUDA_CHECK(cudaMemcpyAsync(destination, d_x, sizeof(Vec3) * m_n,
+                               cudaMemcpyDeviceToDevice));
 }
 
 void CudaPbfSolver::downloadVelocities(std::vector<Vec3>& out) const

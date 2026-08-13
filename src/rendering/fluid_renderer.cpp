@@ -5,12 +5,14 @@
 #include <string>
 #include <type_traits>
 
+#include <cuda_gl_interop.h>
 #include <glm/mat3x3.hpp>
 #include <glm/matrix.hpp>          // glm::transpose
 #include <glm/gtc/type_ptr.hpp>
 
 #include "glsl_program.h"
 #include "sky.h"                   // kEnvironmentGlsl，和背景共用的天空定义
+#include "../solvers/cuda_pbf_solver.cuh"
 
 namespace {
 
@@ -18,6 +20,13 @@ static_assert(std::is_standard_layout_v<Vec3>,
               "Vec3 must have a standard memory layout");
 static_assert(sizeof(Vec3) == 3 * sizeof(float),
               "Vec3 must contain exactly three packed floats");
+
+void checkCuda(cudaError_t error, const char* operation)
+{
+    if (error == cudaSuccess) return;
+    throw std::runtime_error(std::string(operation) + ": "
+                             + cudaGetErrorString(error));
+}
 
 constexpr char kImposterVertexShader[] =
     // language=GLSL
@@ -70,11 +79,12 @@ FluidRenderer::FluidRenderer(std::size_t particleCount)
         throw std::runtime_error("Failed to create the particle VAO or VBO");
     }
 
-    particleCapacity_ = particleCount > 0 ? particleCount : 1;
+    particleCount_ = particleCount;
+    const std::size_t allocationCount = particleCount_ > 0 ? particleCount_ : 1;
 
     glNamedBufferData(
         depthVbo_,
-        static_cast<GLsizeiptr>(particleCapacity_ * sizeof(Vec3)),
+        static_cast<GLsizeiptr>(allocationCount * sizeof(Vec3)),
         nullptr,
         GL_DYNAMIC_DRAW
     );
@@ -90,6 +100,16 @@ FluidRenderer::FluidRenderer(std::size_t particleCount)
     glEnableVertexArrayAttrib(depthVao_, 0);
     glVertexArrayAttribFormat(depthVao_, 0, 3, GL_FLOAT, GL_FALSE, 0);
     glVertexArrayAttribBinding(depthVao_, 0, 0);
+
+    try {
+        checkCuda(cudaGraphicsGLRegisterBuffer(
+                      &cudaPositions_, depthVbo_,
+                      cudaGraphicsRegisterFlagsWriteDiscard),
+                  "cudaGraphicsGLRegisterBuffer failed");
+    } catch (...) {
+        shutdown();
+        throw;
+    }
 }
 
 FluidRenderer::~FluidRenderer()
@@ -185,8 +205,43 @@ void FluidRenderer::ensureTarget(int width, int height)
     }
 }
 
+void FluidRenderer::updatePositions(const CudaPbfSolver& solver)
+{
+    if (static_cast<std::size_t>(solver.count()) != particleCount_) {
+        throw std::runtime_error(
+            "CUDA solver particle count does not match the registered OpenGL VBO");
+    }
+    if (particleCount_ == 0) return;
+
+    checkCuda(cudaGraphicsMapResources(1, &cudaPositions_),
+              "cudaGraphicsMapResources failed");
+
+    bool mapped = true;
+    try {
+        void* devicePointer = nullptr;
+        std::size_t mappedBytes = 0;
+        checkCuda(cudaGraphicsResourceGetMappedPointer(
+                      &devicePointer, &mappedBytes, cudaPositions_),
+                  "cudaGraphicsResourceGetMappedPointer failed");
+
+        if (mappedBytes < particleCount_ * sizeof(Vec3)) {
+            throw std::runtime_error("CUDA-mapped OpenGL VBO is too small");
+        }
+
+        solver.copyPositionsToDevice(static_cast<Vec3*>(devicePointer),
+                                     mappedBytes / sizeof(Vec3));
+
+        const cudaError_t unmapError =
+            cudaGraphicsUnmapResources(1, &cudaPositions_);
+        mapped = false;
+        checkCuda(unmapError, "cudaGraphicsUnmapResources failed");
+    } catch (...) {
+        if (mapped) cudaGraphicsUnmapResources(1, &cudaPositions_);
+        throw;
+    }
+}
+
 void FluidRenderer::render(
-    const std::vector<Vec3>& positions,
     const glm::mat4& view,
     const glm::mat4& projection,
     float radius,
@@ -194,14 +249,12 @@ void FluidRenderer::render(
     int viewportHeight
 )
 {
-    if (positions.empty() || viewportWidth <= 0 || viewportHeight <= 0) {
+    if (particleCount_ == 0 || viewportWidth <= 0 || viewportHeight <= 0) {
         return;
     }
 
     ensureTarget(viewportWidth, viewportHeight);
-    uploadPositions(positions);
-
-    const GLsizei count = static_cast<GLsizei>(positions.size());
+    const GLsizei count = static_cast<GLsizei>(particleCount_);
 
     drawDepthField(view, projection, radius, viewportHeight, count);
     drawThicknessField(view, projection, radius, viewportHeight, count);
@@ -217,30 +270,6 @@ void FluidRenderer::render(
     glDepthMask(GL_TRUE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-}
-
-// 把粒子位置搬到 VBO。
-void FluidRenderer::uploadPositions(const std::vector<Vec3>& positions)
-{
-    // 缓冲区只增不减。glNamedBufferData 会丢弃旧内容，但下面反正整体覆写。
-    if (positions.size() > particleCapacity_) {
-        particleCapacity_ = positions.size();
-        glNamedBufferData(
-            depthVbo_,
-            static_cast<GLsizeiptr>(particleCapacity_ * sizeof(Vec3)),
-            nullptr,
-            GL_DYNAMIC_DRAW
-        );
-    }
-
-    // Vec3 是三个紧凑排列的 float（文件开头两个 static_assert 保证了这点），
-    // 所以 std::vector<Vec3> 的内存能整块拷进 VBO，不需要逐个转换。
-    glNamedBufferSubData(
-        depthVbo_,
-        0,
-        static_cast<GLsizeiptr>(positions.size() * sizeof(Vec3)),
-        positions.data()
-    );
 }
 
 // 深度场
@@ -814,6 +843,15 @@ void FluidRenderer::shadeSurface(const glm::mat4& view, const glm::mat4& project
 
 void FluidRenderer::shutdown()
 {
+    if (cudaPositions_ != nullptr) {
+        const cudaError_t error = cudaGraphicsUnregisterResource(cudaPositions_);
+        if (error != cudaSuccess) {
+            std::fprintf(stderr, "cudaGraphicsUnregisterResource failed: %s\n",
+                         cudaGetErrorString(error));
+        }
+        cudaPositions_ = nullptr;
+    }
+
     if (depthVbo_ != 0) {
         glDeleteBuffers(1, &depthVbo_);
         depthVbo_ = 0;
@@ -911,5 +949,5 @@ void FluidRenderer::shutdown()
     projectionLocation_ = -1;
     viewportHLocation_ = -1;
     radiusLocation_ = -1;
-    particleCapacity_ = 0;
+    particleCount_ = 0;
 }

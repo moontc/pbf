@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <vector>
 
 #include <glad/gl.h>
 #include <glm/mat4x4.hpp>
 
-#include "../vector.h"
+class CudaPbfSolver;
+struct cudaGraphicsResource;
 
 class FluidRenderer final {
 public:
@@ -16,8 +16,11 @@ public:
     FluidRenderer(const FluidRenderer&) = delete;
     FluidRenderer& operator=(const FluidRenderer&) = delete;
 
+    // 把求解器的设备端位置直接写进 OpenGL VBO；调用结束后资源已解除映射，
+    // 可以立刻交给后面的 OpenGL draw call。
+    void updatePositions(const CudaPbfSolver& solver);
+
     void render(
-        const std::vector<Vec3>& positions,
         const glm::mat4& view,
         const glm::mat4& projection,
         float radius,
@@ -30,8 +33,6 @@ private:
 
     // 尺寸变化时重建离屏目标
     void ensureTarget(int width, int height);
-
-    void uploadPositions(const std::vector<Vec3>& positions);
 
     void initDepthPass();
     void initThicknessPass();
@@ -57,6 +58,7 @@ private:
     GLuint depthProgram_ = 0;
     GLuint depthVao_ = 0;
     GLuint depthVbo_ = 0;
+    cudaGraphicsResource* cudaPositions_ = nullptr;
     GLint viewLocation_ = -1;
     GLint projectionLocation_ = -1;
     GLint radiusLocation_ = -1;
@@ -99,7 +101,7 @@ private:
     GLint  surfaceInvViewRotLocation_ = -1;
     GLint  surfaceRefractLocation_ = -1;
 
-    std::size_t particleCapacity_ = 0;
+    std::size_t particleCount_ = 0;
 
 public:
     // 空间标准差 σ_s 对应的滤波半径，以"粒子半径"为单位
