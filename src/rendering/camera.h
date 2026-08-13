@@ -31,8 +31,8 @@ private:
 
     float rotateSpeed = 0.3f;
     float zoomSpeed   = 0.1f;
-    float minDistance = 0.05f;
-    float maxDistance = 1000.0f;
+    float minDistance = 0.5f;
+    float maxDistance = 10.0f;
     float maxPitch    = 89.0f;
 
     enum class Mode { None, Rotate };

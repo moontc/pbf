@@ -108,21 +108,21 @@ target_link_libraries(pbf PRIVATE
 )
 
 # --------------------------------------------------------------- the tests ---
-# Cross-validates the CUDA solver against the CPU one.  No window, no GL
-# context; exits non-zero on failure so it can gate a commit.
-add_executable(pbf_validate
-        test/validate_main.cpp
-        test/solver_validate.cpp
-        test/solver_validate.h)
-
-target_link_libraries(pbf_validate PRIVATE pbf_solver)
-
-# Headless solver-only benchmark.  Nsight Compute attaches to this rather than
-# to the windowed app -- see the comment at the top of bench_main.cpp.
-add_executable(pbf_bench test/bench_main.cpp)
-target_link_libraries(pbf_bench PRIVATE pbf_solver)
-
-# Offline parameter calibration -- prints a constants block for PbfParams.
-# Standalone, no dependency on src/.
-add_executable(params_test test/params_test.cpp)
-target_include_directories(params_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+# Local-only tools (cross-validation, benchmark, parameter calibration).  They
+# live in test/CMakeLists.txt so that nothing above this line knows about them,
+# and the whole directory -- that file included -- is covered by .gitignore's
+# /test entry.
+#
+# The EXISTS guard is the point, not defensive noise: a fresh clone has no test/
+# at all, and declaring those targets unconditionally from here made configure
+# fail outright on three of them.  Must come after add_library(pbf_solver ...),
+# since all three link against it.
+#
+# Trade-off, accepted deliberately: a fresh clone cannot run pbf_validate, which
+# is the only oracle for the CUDA port.  Anyone needing it has to obtain test/
+# out of band.
+if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/CMakeLists.txt)
+    add_subdirectory(test)
+else ()
+    message(STATUS "test/ not present -- skipping pbf_validate, pbf_bench, params_test")
+endif ()
