@@ -482,6 +482,13 @@ CudaPbfSolver::CudaPbfSolver(const PbfParams& p)
     m_ny = std::max(1, static_cast<int>((hi.y - m_gridLo.y) * inv) + 1);
     m_nz = std::max(1, static_cast<int>((hi.z - m_gridLo.z) * inv) + 1);
     m_nCells = m_nx * m_ny * m_nz;
+
+    try {
+        initBlock();
+    } catch (...) {
+        release();
+        throw;
+    }
 }
 
 CudaPbfSolver::~CudaPbfSolver()
@@ -510,9 +517,12 @@ void CudaPbfSolver::release()
     d_scanTemp = d_stats = nullptr;
 }
 
-void CudaPbfSolver::initBlock(const Vec3& lo, const Vec3& hi, unsigned seed)
+void CudaPbfSolver::initBlock()
 {
-    std::mt19937 rng(seed);
+    const Vec3& lo = m_p.blockLo;
+    const Vec3& hi = m_p.blockHi;
+
+    std::mt19937 rng(m_p.seed);
     std::uniform_real_distribution<float> jitter(-0.5f, 0.5f);
 
     const float amp = 1e-4f;

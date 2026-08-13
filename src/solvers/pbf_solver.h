@@ -13,7 +13,11 @@ static_assert(sizeof(Vec3) == 3 * sizeof(float),
 
 class PbfSolver {
 public:
-    explicit PbfSolver(const PbfParams& p = PbfParams()) { setParams(p); }
+
+    explicit PbfSolver(const PbfParams& p = PbfParams()) {
+        setParams(p);
+        initBlock();
+    }
 
     void setParams(const PbfParams& p) {
         m_p = p;
@@ -31,8 +35,12 @@ public:
 
     const PbfParams& params() const { return m_p; }
 
-    void initBlock(const Vec3& lo, const Vec3& hi, unsigned seed = 12345) {
-        std::mt19937 rng(seed);
+
+    void initBlock() {
+        const Vec3& lo = m_p.blockLo;
+        const Vec3& hi = m_p.blockHi;
+
+        std::mt19937 rng(m_p.seed);
         std::uniform_real_distribution<float> jitter(-0.5f, 0.5f);
 
         const float amp = 1e-4f;

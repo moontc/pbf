@@ -13,7 +13,7 @@ public:
     CudaPbfSolver(const CudaPbfSolver&) = delete;
     CudaPbfSolver& operator=(const CudaPbfSolver&) = delete;
 
-    void initBlock(const Vec3& lo, const Vec3& hi, unsigned seed = 12345);
+    void initBlock();
 
     void debug(bool enabled = true) noexcept { m_debug = enabled; }
     void step(float dtFrame);

@@ -150,20 +150,14 @@ int main() {
 
     constexpr bool kProfileFrames = true;
 
-    const Vec3 blockLo(0.05f, 0.05f, 0.05f);
-    const Vec3 blockHi(0.45f, 0.90f, 0.45f);
-
     PbfParams params;
-
-    //PbfSolver solver(params);
-    CudaPbfSolver solver(params);
-
-    solver.initBlock(blockLo, blockHi);
 
     int result = 0;
 
     try {
-        Camera camera({0.5, 0.5, 0.25}, 3.0f);
+        CudaPbfSolver solver(params);
+
+        Camera camera({0.0, 0.5, 0.25}, 4.0f);
         camera.attach(window);
 
         ParticleRenderer particles(solver.count());
