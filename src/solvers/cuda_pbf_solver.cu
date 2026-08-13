@@ -1,6 +1,5 @@
 #include "cuda_pbf_solver.cuh"
 
-#include <cstddef>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -72,7 +71,7 @@ __device__ __forceinline__ float wPoly6(float r, const GpuParams& p)
 __device__ __forceinline__ Vec3 gradWSpiky(const Vec3& rij, const GpuParams& p)
 {
     const float r = len(rij);
-    if (r >= p.h || r < 1e-9f) return Vec3(0, 0, 0);
+    if (r >= p.h || r < 1e-9f) return {0, 0, 0};
     const float c = p.kSpiky * (p.h - r) * (p.h - r);
     return rij * (c / r);
 }
@@ -529,13 +528,12 @@ void CudaPbfSolver::initBlock()
 
     m_hostX.clear();
     for (float px = lo.x; px <= hi.x + 1e-6f; px += m_p.d)
-    for (float py = lo.y; py <= hi.y + 1e-6f; py += m_p.d)
-    for (float pz = lo.z; pz <= hi.z + 1e-6f; pz += m_p.d) {
-        m_hostX.push_back(Vec3(px + jitter(rng) * amp,
-                               py + jitter(rng) * amp,
-                               pz + jitter(rng) * amp));
-    }
-
+        for (float py = lo.y; py <= hi.y + 1e-6f; py += m_p.d)
+            for (float pz = lo.z; pz <= hi.z + 1e-6f; pz += m_p.d) {
+                m_hostX.emplace_back(px + jitter(rng) * amp,
+                                       py + jitter(rng) * amp,
+                                       pz + jitter(rng) * amp);
+            }
     m_n = static_cast<int>(m_hostX.size());
     allocate();
 
@@ -548,8 +546,8 @@ void CudaPbfSolver::allocate()
 {
     release();
 
-    const size_t n  = static_cast<size_t>(m_n);
-    const size_t nc = static_cast<size_t>(m_nCells);
+    const auto n  = static_cast<size_t>(m_n);
+    const auto nc = static_cast<size_t>(m_nCells);
 
     CUDA_CHECK(cudaMalloc(&d_x,       sizeof(Vec3) * n));
     CUDA_CHECK(cudaMalloc(&d_v,       sizeof(Vec3) * n));
@@ -624,7 +622,7 @@ void CudaPbfSolver::findNeighbors()
     kCellOfAndCount<<<blocks, kBlock>>>(d_xp, d_cellOf, d_cellCount, gp);
     CUDA_CHECK_LAUNCH();
 
-    size_t bytes = static_cast<size_t>(m_scanTempBytes);
+    auto bytes = static_cast<size_t>(m_scanTempBytes);
     CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_scanTemp, bytes,
                                              d_cellCount, d_cellStart,
                                              m_nCells + 1));
