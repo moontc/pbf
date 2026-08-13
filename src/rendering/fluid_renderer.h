@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 #include <glad/gl.h>
 #include <glm/mat4x4.hpp>
+
+#include "../vector.h"
 
 class CudaPbfSolver;
 struct cudaGraphicsResource;
@@ -16,9 +19,8 @@ public:
     FluidRenderer(const FluidRenderer&) = delete;
     FluidRenderer& operator=(const FluidRenderer&) = delete;
 
-    // 把求解器的设备端位置直接写进 OpenGL VBO；调用结束后资源已解除映射，
-    // 可以立刻交给后面的 OpenGL draw call。
     void updatePositions(const CudaPbfSolver& solver);
+    void updatePositions(const std::vector<Vec3>& positions);
 
     void render(
         const glm::mat4& view,

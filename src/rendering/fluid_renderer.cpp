@@ -241,6 +241,22 @@ void FluidRenderer::updatePositions(const CudaPbfSolver& solver)
     }
 }
 
+void FluidRenderer::updatePositions(const std::vector<Vec3>& positions)
+{
+    if (positions.size() != particleCount_) {
+        throw std::runtime_error(
+            "CPU position count does not match the registered OpenGL VBO");
+    }
+    if (particleCount_ == 0) return;
+
+    glNamedBufferSubData(
+        depthVbo_,
+        0,
+        static_cast<GLsizeiptr>(positions.size() * sizeof(Vec3)),
+        positions.data()
+    );
+}
+
 void FluidRenderer::render(
     const glm::mat4& view,
     const glm::mat4& projection,

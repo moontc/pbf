@@ -31,7 +31,7 @@ private:
 
     float rotateSpeed = 0.3f;
     float zoomSpeed   = 0.1f;
-    float minDistance = 0.5f;
+    float minDistance = 1.0f;
     float maxDistance = 10.0f;
     float maxPitch    = 89.0f;
 
