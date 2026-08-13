@@ -21,7 +21,7 @@ public:
 private:
     glm::vec3 target{0.0f};
     float distance = 5.0f;
-    float yaw      = -90.0f;
+    float yaw      = -45.0f;
     float pitch    = 20.0f;
 
     float fov    = 45.0f;

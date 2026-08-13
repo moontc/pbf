@@ -24,8 +24,8 @@ struct PbfParams {
     Vec3  boxHi   = Vec3(1.0f, 2.0f, 0.5f);
 
     // 初始水块
-    Vec3  blockLo = Vec3(0.05f, 0.05f, 0.05f);
-    Vec3  blockHi = Vec3(0.45f, 0.90f, 0.45f);
+    Vec3  blockLo = Vec3(-0.05f, 0.20f, -0.05f);
+    Vec3  blockHi = Vec3(0.5f, 1.70f, 0.5f);
     unsigned seed = 10000;
 
     int   maxNeighbors = 128;     // 邻居表预留容量

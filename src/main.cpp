@@ -157,7 +157,7 @@ int main() {
     try {
         CudaPbfSolver solver(params);
 
-        Camera camera({0.0, 0.5, 0.25}, 4.0f);
+        Camera camera({0.0, 0.5, 0.25}, 4.5f);
         camera.attach(window);
 
         ParticleRenderer particles(solver.count());
