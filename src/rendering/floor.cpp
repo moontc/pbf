@@ -32,44 +32,41 @@ constexpr char kFloorFragmentShader[] =
 
 in vec3 vWorld;
 
-uniform vec2  uCenter;      // xz centre of the simulation box footprint
-uniform float uCell;        // checker square size, world units
-uniform float uFadeStart;   // radius where the plane starts fading out
-uniform float uFadeEnd;     // radius where it is fully gone
+uniform vec2  uCenter;      // 模拟盒底面在 xz 平面上的中心
+uniform float uCell;        // 棋盘格方块边长，单位为世界空间单位
+uniform float uFadeStart;   // 平面开始淡出的半径
+uniform float uFadeEnd;     // 平面完全消失的半径
 
 layout(location = 0) out vec4 fragColor;
 
-// Triangle wave, period 2, range [0,1].  This is the antiderivative of the
-// square wave that generates one axis of the checkerboard.
+// 周期为 2、值域为 [0,1] 的三角波；它是生成棋盘格单轴图案的方波的原函数。
 float triWave(float t)
 {
     return 1.0 - 2.0 * abs(fract(t * 0.5) - 0.5);
 }
 
-// Mean value of that square wave (which runs -1..+1) over the interval
-// [t - w/2, t + w/2].  Because triWave integrates the square wave, the mean is
-// an exact difference of two triWave samples -- no sampling, no loop.
+// 计算该方波（值域为 -1..+1）在区间 [t - w/2, t + w/2] 上的平均值。
+// 因为 triWave 是方波的积分，所以只需精确计算两个 triWave 样本之差，
+// 不需要采样或循环。
 float meanSquare(float t, float w)
 {
     return (triWave(t + 0.5 * w) - triWave(t - 0.5 * w)) / w;
 }
 
-// Box-filtered checkerboard.
+// 经过方框滤波的棋盘格。
 //
-// The naive form -- mod(floor(c.x) + floor(c.y), 2.0) -- aliases into moire as
-// soon as one pixel spans more than one square, which on a ground plane happens
-// only a few squares out.  fwidth cannot rescue it the way it rescues a grid
-// line: there is no single edge to soften, the whole pattern is under-sampled.
+// 直接使用 mod(floor(c.x) + floor(c.y), 2.0) 时，只要一个像素覆盖多个方格就会
+// 产生摩尔纹；在地面上离开中心几个方格后就会出现。fwidth 无法像处理网格线那样
+// 修复它，因为这里没有可单独柔化的一条边缘，而是整个图案都欠采样。
 //
-// So integrate instead of point-sample.  The checker is separable into a
-// product of two square waves, w is the pixel footprint measured in squares,
-// and each axis is averaged over exactly that footprint.  Once the footprint
-// exceeds one square the average decays to 0.5 -- the same mid tone a mipmap
-// would converge to, but computed analytically and with no texture at all.
+// 因此这里采用积分而不是点采样。棋盘格可分解为两个方波的乘积，w 是以方格为单位
+// 的像素覆盖范围，每个轴都在该范围内求平均。覆盖范围超过一个方格后，平均值会
+// 衰减到 0.5，与多级渐远纹理最终收敛的中间色相同，但这里完全通过解析计算实现，
+// 不需要纹理。
 float checker(vec2 p, float size)
 {
     vec2 c = p / size;
-    vec2 w = fwidth(c) + 1e-4;   // +eps: w is a divisor
+    vec2 w = fwidth(c) + 1e-4;   // 加上 eps，因为 w 将作为除数
     return 0.5 - 0.5 * meanSquare(c.x, w.x) * meanSquare(c.y, w.y);
 }
 
@@ -82,8 +79,7 @@ void main()
 
     vec3 color = mix(kDark, kLight, checker(p, uCell));
 
-    // Radial fade, so the quad reads as an open ground plane rather than a
-    // rectangular slab floating in the void.
+    // 使用径向淡出，使该四边形看起来像开放地面，而不是悬浮在空中的矩形平板。
     float alpha = 1.0 - smoothstep(uFadeStart, uFadeEnd, length(p - uCenter));
 
     if (alpha <= 0.0) {

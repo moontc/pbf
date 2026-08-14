@@ -12,12 +12,9 @@
 #include <cuda_gl_interop.h>
 
 #include "rendering/camera.h"
-#include "rendering/particle_renderer.h"
 #include "rendering/floor.h"
 #include "rendering/sky.h"
 #include "frame_profiler.h"
-#include "vector.h"
-#include "solvers/pbf_solver.h"
 #include "solvers/cuda_pbf_solver.cuh"
 #include "rendering/fluid_renderer.h"
 
@@ -171,7 +168,6 @@ int main() {
         Camera camera({0.0, 0.5, 0.25}, 4.5f);
         camera.attach(window);
 
-        ParticleRenderer particles(solver.count());
         FluidRenderer fluid(solver.count());
         fluid.updatePositions(solver);
         Floor floor(params.boxLo, params.boxHi);
@@ -220,9 +216,7 @@ int main() {
 
             sky.render(camera.view(), camera.projection());
             floor.render(camera.projection() * camera.view());
-            //particles.render(solver.positions(), camera.view(), camera.projection());
-            fluid.render(camera.view(), camera.projection(),
-                         solver.params().d * 0.7f, fbW, fbH);
+            fluid.render(camera.view(), camera.projection(), solver.params().d * 0.7f, fbW, fbH);
 
             profiler.afterRender();
 

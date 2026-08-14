@@ -16,27 +16,24 @@ public:
 
     void initBlock();
 
-    void debug(bool enabled = true) noexcept { m_debug = enabled; }
+    void debug(bool enabled = true) noexcept { debug_ = enabled; }
     void step(float dtFrame);
 
-    int count() const { return m_n; }
-    const PbfParams& params() const { return m_p; }
+    int count() const { return n_; }
+    const PbfParams& params() const { return params_; }
 
     const std::vector<Vec3>& positions() const;
-    const PbfStats& stats() const { return m_stats; }
+    const PbfStats& stats() const { return stats_; }
 
     void copyPositionsToDevice(Vec3* destination,
                                std::size_t destinationCount) const;
 
-    // Validation hooks.  Not used by the render loop; they exist so the GPU
-    // state can be diffed against the CPU solver's.  Each one synchronises.
+    // 验证接口
     void downloadVelocities(std::vector<Vec3>& out) const;
     void downloadDensities(std::vector<float>& out) const;
     void downloadNeighbors(std::vector<std::vector<int>>& out) const;
 
-    // Non-zero means maxNeighbors was too small and neighbours were silently
-    // dropped.  The CPU solver's std::vector grows instead, so a non-zero value
-    // here is also the one way the two can legitimately disagree.
+    // 非零表示 maxNeighbors 太小，部分邻居被静默丢弃
     int neighborOverflow() const;
 
 private:
@@ -45,50 +42,50 @@ private:
     void substep(float dt, bool wantStats);
     void findNeighbors();
 
-    PbfParams m_p;
-    int m_n = 0;
-    bool m_debug = false;
+    PbfParams params_;
+    int n_ = 0;
+    bool debug_ = false;
 
-    // Kernel constants, derived from m_p once in the constructor.
-    float m_kPoly6 = 0.0f;
-    float m_kSpiky = 0.0f;
-    float m_wSelf  = 0.0f;
-    float m_wDq    = 1.0f;
+    // 内核常量，在构造函数中根据 params_ 计算一次
+    float kPoly6_ = 0.0f;
+    float kSpiky_ = 0.0f;
+    float wSelf_  = 0.0f;
+    float wDq_    = 1.0f;
 
-    Vec3 m_gridLo;
-    int  m_nx = 1, m_ny = 1, m_nz = 1, m_nCells = 1;
+    Vec3 gridLo_;
+    int  nx_ = 1, ny_ = 1, nz_ = 1, nCells_ = 1;
 
-    // Device buffers.
-    Vec3*  d_x         = nullptr;
-    Vec3*  d_v         = nullptr;
-    Vec3*  d_xp        = nullptr;
-    Vec3*  d_xTmp      = nullptr;
-    Vec3*  d_vTmp      = nullptr;
-    Vec3*  d_xpTmp     = nullptr;
-    Vec3*  d_dp        = nullptr;
-    Vec3*  d_omega     = nullptr;
-    Vec3*  d_dv        = nullptr;   // XSPH scratch
-    float* d_lambda    = nullptr;
-    float* d_density   = nullptr;
+    // 设备缓冲区。
+    Vec3*  dX_         = nullptr;
+    Vec3*  dV_         = nullptr;
+    Vec3*  dXp_        = nullptr;
+    Vec3*  dXTmp_      = nullptr;
+    Vec3*  dVTmp_      = nullptr;
+    Vec3*  dXpTmp_     = nullptr;
+    Vec3*  dDp_        = nullptr;
+    Vec3*  dOmega_     = nullptr;
+    Vec3*  dDv_        = nullptr;   // XSPH 临时缓冲区
+    float* dLambda_    = nullptr;
+    float* dDensity_   = nullptr;
 
-    int*   d_cellOf    = nullptr;
-    int*   d_cellCount = nullptr;   // nCells+1, histogram before the scan
-    int*   d_cellStart = nullptr;   // nCells+1, prefix sums
-    int*   d_cursor    = nullptr;   // nCells,   scatter write heads
-    int*   d_sorted    = nullptr;
-    int*   d_id        = nullptr;   // current slot -> original particle id
-    int*   d_idTmp     = nullptr;
+    int*   dCellOf_    = nullptr;
+    int*   dCellCount_ = nullptr;
+    int*   dCellStart_ = nullptr;
+    int*   dCursor_    = nullptr;
+    int*   dSorted_    = nullptr;
+    int*   dId_        = nullptr;   // 当前槽位 -> 原始粒子编号
+    int*   dIdTmp_     = nullptr;
 
-    int*   d_nbr       = nullptr;
-    int*   d_nbrCount  = nullptr;
-    int*   d_overflow  = nullptr;
+    int*   dNbr_       = nullptr;
+    int*   dNbrCount_  = nullptr;
+    int*   dOverflow_  = nullptr;
 
-    void*  d_scanTemp  = nullptr;
-    unsigned long long m_scanTempBytes = 0;
+    void*  dScanTemp_  = nullptr;
+    unsigned long long scanTempBytes_ = 0;
 
-    void*  d_stats     = nullptr;
+    void*  dStats_     = nullptr;
 
-    mutable std::vector<Vec3> m_hostX;
-    mutable bool m_hostPositionsDirty = false;
-    PbfStats m_stats;
+    mutable std::vector<Vec3> hostX_;
+    mutable bool hostPositionsDirty_ = false;
+    PbfStats stats_;
 };

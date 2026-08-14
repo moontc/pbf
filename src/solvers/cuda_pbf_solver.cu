@@ -53,9 +53,7 @@ struct GpuStats {
     int   cflHits;
 };
 
-// Only correct for non-negative values -- for those, IEEE-754 bit patterns sort
-// in the same order as the numbers, so an integer max *is* a float max.  Both
-// call sites here (a density and a speed) are non-negative by construction.
+// 仅适用于非负值，对非负值而言，IEEE-754 位模式的排序与数值排序一致
 __device__ __forceinline__ void atomicMaxFloat(float* addr, float value)
 {
     atomicMax(reinterpret_cast<unsigned int*>(addr), __float_as_uint(value));
@@ -85,8 +83,6 @@ __device__ __forceinline__ int cellIndex(const Vec3& q, const GpuParams& p)
     const int cz = min(max(static_cast<int>((q.z - p.gridLo.z) * inv), 0), p.nz - 1);
     return (cz * p.ny + cy) * p.nx + cx;
 }
-
-// ------------ kernels ---------------
 
 __global__ void kPredict(Vec3* x, Vec3* v, Vec3* xp, GpuParams p, float dt)
 {
@@ -122,9 +118,7 @@ __global__ void kInitIds(int* id, int n)
     if (i < n) id[i] = i;
 }
 
-// Apply the counting-sort permutation to the persistent particle state.  The
-// output slot is the particle's position in cell order; id preserves the public
-// API's original particle order for downloads and validation.
+// 重排粒子
 __global__ void kReorderState(const int* sorted,
                               const Vec3* xIn,
                               const Vec3* vIn,
@@ -185,8 +179,6 @@ __global__ void kFindNeighbors(const Vec3* xp,
 
                 const int c = (z * p.ny + y) * p.nx + x;
 
-                // Particle storage has already been permuted into cell order,
-                // so the prefix-sum interval is also the particle-index range.
                 for (int j = cellStart[c]; j < cellStart[c + 1]; ++j) {
                     if (j == i) continue;
                     const Vec3 rij = xi - xp[j];
@@ -220,8 +212,8 @@ __global__ void kComputeLambda(const Vec3* xp,
 
     float rho = p.mass * p.wSelf;
 
-    Vec3  gradI(0, 0, 0);   // eq (8), k = i branch: accumulate, then square
-    float sumSq = 0.0f;     // eq (8), k = j branch: square, then accumulate
+    Vec3  gradI(0, 0, 0);       // 公式 (8) 的 k = i 分支：先累加，再平方
+    float sumSq = 0.0f;                // 公式 (8) 的 k = j 分支：先平方，再累加
 
     const int cnt = nbrCount[i];
     for (int k = 0; k < cnt; ++k) {
@@ -238,7 +230,7 @@ __global__ void kComputeLambda(const Vec3* xp,
     density[i] = rho;
 
     const float C = rho / p.rho0 - 1.0f;
-    lambda[i] = -C / (sumSq + p.eps);   // eq (11), CFM
+    lambda[i] = -C / (sumSq + p.eps);   // 公式 (11)，CFM 正则化
 }
 
 __global__ void kComputeDeltaP(const Vec3* xp,
@@ -355,7 +347,7 @@ __global__ void kVorticityOmega(const Vec3* x,
     const int cnt = nbrCount[i];
     for (int k = 0; k < cnt; ++k) {
         const int j = nbr[k * p.n + i];
-        const Vec3 g = gradWSpiky(xi - x[j], p) * (-p.mass / density[j]); // eq (15)
+        const Vec3 g = gradWSpiky(xi - x[j], p) * (-p.mass / density[j]); // 公式 (15)
         w += cross(v[j] - vi, g);
     }
 
@@ -391,7 +383,7 @@ __global__ void kVorticityApply(const Vec3* x,
     if (e < 1e-9f) return;
 
     const Vec3 N = eta * (1.0f / e);
-    v[i] += cross(N, wi) * (p.vorticity * dt);   // eq (16)
+    v[i] += cross(N, wi) * (p.vorticity * dt);   // 公式 (16)
 }
 
 __global__ void kXsphCompute(const Vec3* x,
@@ -416,16 +408,15 @@ __global__ void kXsphCompute(const Vec3* x,
         const int j = nbr[k * p.n + i];
         const float w = wPoly6(len(xi - x[j]), p);
 
-        const float wt = 2.0f * p.mass / (rhoI + density[j]); // eq (17)
+        const float wt = 2.0f * p.mass / (rhoI + density[j]); // 公式 (17)
         acc += (v[j] - vi) * (p.xsph * wt * w);
     }
 
     dv[i] = acc;
 }
 
-// Separate pass: applying dv in the gather loop above would let a particle read
-// its neighbours' already-updated velocities, which is exactly the Jacobi /
-// Gauss-Seidel distinction that makes the result thread-order dependent.
+// 单独执行应用步骤：如果在上面的聚集循环中直接应用 dv，粒子就可能读到邻居已经
+// 更新后的速度。这正是雅可比法与高斯-赛德尔法的区别，会使结果依赖线程执行顺序。
 __global__ void kXsphApply(Vec3* v, const Vec3* dv, GpuParams p)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -433,10 +424,7 @@ __global__ void kXsphApply(Vec3* v, const Vec3* dv, GpuParams p)
     v[i] += dv[i];
 }
 
-// Second CFL clamp: vorticity and XSPH both add velocity *after* the first one,
-// so without this stats.vMax overshoots the limit by 8-12% and the next
-// substep's prediction starts from an unbounded velocity.  No position rewrite
-// here -- x is already committed.
+// 第二次 CFL 限制：涡量和 XSPH 都在第一次限制之后增加速度
 __global__ void kCflClamp2(Vec3* v, GpuStats* st, GpuParams p, float dt)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -456,31 +444,29 @@ __global__ void kCflClamp2(Vec3* v, GpuStats* st, GpuParams p, float dt)
 
 } // namespace
 
-// ============================================================================
-
 CudaPbfSolver::CudaPbfSolver(const PbfParams& p)
 {
-    m_p = p;
+    params_ = p;
 
     constexpr float kPi = 3.14159265358979323846f;
-    m_kPoly6 = 315.0f / (64.0f * kPi * std::pow(m_p.h, 9.0f));
-    m_kSpiky = -45.0f / (kPi * std::pow(m_p.h, 6.0f));
-    m_wSelf  = m_kPoly6 * (m_p.h * m_p.h) * (m_p.h * m_p.h) * (m_p.h * m_p.h);
+    kPoly6_ = 315.0f / (64.0f * kPi * std::pow(params_.h, 9.0f));
+    kSpiky_ = -45.0f / (kPi * std::pow(params_.h, 6.0f));
+    wSelf_  = kPoly6_ * (params_.h * params_.h) * (params_.h * params_.h) * (params_.h * params_.h);
 
-    const float rq = m_p.deltaQ * m_p.h;
-    const float tq = m_p.h * m_p.h - rq * rq;
-    m_wDq = (rq >= m_p.h) ? 1.0f : m_kPoly6 * tq * tq * tq;
-    if (m_wDq <= 0.0f) m_wDq = 1.0f;
+    const float rq = params_.deltaQ * params_.h;
+    const float tq = params_.h * params_.h - rq * rq;
+    wDq_ = (rq >= params_.h) ? 1.0f : kPoly6_ * tq * tq * tq;
+    if (wDq_ <= 0.0f) wDq_ = 1.0f;
 
-    const float pad = 2.0f * m_p.h;
-    m_gridLo = Vec3(m_p.boxLo.x - pad, m_p.boxLo.y - pad, m_p.boxLo.z - pad);
-    const Vec3 hi(m_p.boxHi.x + pad, m_p.boxHi.y + pad, m_p.boxHi.z + pad);
+    const float pad = 2.0f * params_.h;
+    gridLo_ = Vec3(params_.boxLo.x - pad, params_.boxLo.y - pad, params_.boxLo.z - pad);
+    const Vec3 hi(params_.boxHi.x + pad, params_.boxHi.y + pad, params_.boxHi.z + pad);
 
-    const float inv = 1.0f / m_p.h;
-    m_nx = std::max(1, static_cast<int>((hi.x - m_gridLo.x) * inv) + 1);
-    m_ny = std::max(1, static_cast<int>((hi.y - m_gridLo.y) * inv) + 1);
-    m_nz = std::max(1, static_cast<int>((hi.z - m_gridLo.z) * inv) + 1);
-    m_nCells = m_nx * m_ny * m_nz;
+    const float inv = 1.0f / params_.h;
+    nx_ = std::max(1, static_cast<int>((hi.x - gridLo_.x) * inv) + 1);
+    ny_ = std::max(1, static_cast<int>((hi.y - gridLo_.y) * inv) + 1);
+    nz_ = std::max(1, static_cast<int>((hi.z - gridLo_.z) * inv) + 1);
+    nCells_ = nx_ * ny_ * nz_;
 
     try {
         initBlock();
@@ -497,96 +483,96 @@ CudaPbfSolver::~CudaPbfSolver()
 
 void CudaPbfSolver::release()
 {
-    cudaFree(d_x);        cudaFree(d_v);         cudaFree(d_xp);
-    cudaFree(d_xTmp);     cudaFree(d_vTmp);      cudaFree(d_xpTmp);
-    cudaFree(d_dp);       cudaFree(d_omega);     cudaFree(d_dv);
-    cudaFree(d_lambda);   cudaFree(d_density);
-    cudaFree(d_cellOf);   cudaFree(d_cellCount); cudaFree(d_cellStart);
-    cudaFree(d_cursor);   cudaFree(d_sorted);    cudaFree(d_id);
-    cudaFree(d_idTmp);
-    cudaFree(d_nbr);      cudaFree(d_nbrCount);  cudaFree(d_overflow);
-    cudaFree(d_scanTemp); cudaFree(d_stats);
+    cudaFree(dX_);        cudaFree(dV_);         cudaFree(dXp_);
+    cudaFree(dXTmp_);     cudaFree(dVTmp_);      cudaFree(dXpTmp_);
+    cudaFree(dDp_);       cudaFree(dOmega_);     cudaFree(dDv_);
+    cudaFree(dLambda_);   cudaFree(dDensity_);
+    cudaFree(dCellOf_);   cudaFree(dCellCount_); cudaFree(dCellStart_);
+    cudaFree(dCursor_);   cudaFree(dSorted_);    cudaFree(dId_);
+    cudaFree(dIdTmp_);
+    cudaFree(dNbr_);      cudaFree(dNbrCount_);  cudaFree(dOverflow_);
+    cudaFree(dScanTemp_); cudaFree(dStats_);
 
-    d_x = d_v = d_xp = d_dp = d_omega = d_dv = nullptr;
-    d_xTmp = d_vTmp = d_xpTmp = nullptr;
-    d_lambda = d_density = nullptr;
-    d_cellOf = d_cellCount = d_cellStart = d_cursor = d_sorted = nullptr;
-    d_id = d_idTmp = nullptr;
-    d_nbr = d_nbrCount = d_overflow = nullptr;
-    d_scanTemp = d_stats = nullptr;
+    dX_ = dV_ = dXp_ = dDp_ = dOmega_ = dDv_ = nullptr;
+    dXTmp_ = dVTmp_ = dXpTmp_ = nullptr;
+    dLambda_ = dDensity_ = nullptr;
+    dCellOf_ = dCellCount_ = dCellStart_ = dCursor_ = dSorted_ = nullptr;
+    dId_ = dIdTmp_ = nullptr;
+    dNbr_ = dNbrCount_ = dOverflow_ = nullptr;
+    dScanTemp_ = dStats_ = nullptr;
 }
 
 void CudaPbfSolver::initBlock()
 {
-    const Vec3& lo = m_p.blockLo;
-    const Vec3& hi = m_p.blockHi;
+    const Vec3& lo = params_.blockLo;
+    const Vec3& hi = params_.blockHi;
 
-    std::mt19937 rng(m_p.seed);
+    std::mt19937 rng(params_.seed);
     std::uniform_real_distribution<float> jitter(-0.5f, 0.5f);
 
     const float amp = 1e-4f;
 
-    m_hostX.clear();
-    for (float px = lo.x; px <= hi.x + 1e-6f; px += m_p.d)
-        for (float py = lo.y; py <= hi.y + 1e-6f; py += m_p.d)
-            for (float pz = lo.z; pz <= hi.z + 1e-6f; pz += m_p.d) {
-                m_hostX.emplace_back(px + jitter(rng) * amp,
+    hostX_.clear();
+    for (float px = lo.x; px <= hi.x + 1e-6f; px += params_.d)
+        for (float py = lo.y; py <= hi.y + 1e-6f; py += params_.d)
+            for (float pz = lo.z; pz <= hi.z + 1e-6f; pz += params_.d) {
+                hostX_.emplace_back(px + jitter(rng) * amp,
                                        py + jitter(rng) * amp,
                                        pz + jitter(rng) * amp);
             }
-    m_n = static_cast<int>(m_hostX.size());
+    n_ = static_cast<int>(hostX_.size());
     allocate();
 
-    CUDA_CHECK(cudaMemcpy(d_x, m_hostX.data(),
-                          sizeof(Vec3) * m_n, cudaMemcpyHostToDevice));
-    m_hostPositionsDirty = false;
+    CUDA_CHECK(cudaMemcpy(dX_, hostX_.data(),
+                          sizeof(Vec3) * n_, cudaMemcpyHostToDevice));
+    hostPositionsDirty_ = false;
 }
 
 void CudaPbfSolver::allocate()
 {
     release();
 
-    const auto n  = static_cast<size_t>(m_n);
-    const auto nc = static_cast<size_t>(m_nCells);
+    const auto n  = static_cast<size_t>(n_);
+    const auto nc = static_cast<size_t>(nCells_);
 
-    CUDA_CHECK(cudaMalloc(&d_x,       sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_v,       sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_xp,      sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_xTmp,    sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_vTmp,    sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_xpTmp,   sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_dp,      sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_omega,   sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_dv,      sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMalloc(&d_lambda,  sizeof(float) * n));
-    CUDA_CHECK(cudaMalloc(&d_density, sizeof(float) * n));
+    CUDA_CHECK(cudaMalloc(&dX_,       sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dV_,       sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dXp_,      sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dXTmp_,    sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dVTmp_,    sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dXpTmp_,   sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dDp_,      sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dOmega_,   sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dDv_,      sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMalloc(&dLambda_,  sizeof(float) * n));
+    CUDA_CHECK(cudaMalloc(&dDensity_, sizeof(float) * n));
 
-    CUDA_CHECK(cudaMalloc(&d_cellOf,    sizeof(int) * n));
-    CUDA_CHECK(cudaMalloc(&d_cellCount, sizeof(int) * (nc + 1)));
-    CUDA_CHECK(cudaMalloc(&d_cellStart, sizeof(int) * (nc + 1)));
-    CUDA_CHECK(cudaMalloc(&d_cursor,    sizeof(int) * nc));
-    CUDA_CHECK(cudaMalloc(&d_sorted,    sizeof(int) * n));
-    CUDA_CHECK(cudaMalloc(&d_id,        sizeof(int) * n));
-    CUDA_CHECK(cudaMalloc(&d_idTmp,     sizeof(int) * n));
+    CUDA_CHECK(cudaMalloc(&dCellOf_,    sizeof(int) * n));
+    CUDA_CHECK(cudaMalloc(&dCellCount_, sizeof(int) * (nc + 1)));
+    CUDA_CHECK(cudaMalloc(&dCellStart_, sizeof(int) * (nc + 1)));
+    CUDA_CHECK(cudaMalloc(&dCursor_,    sizeof(int) * nc));
+    CUDA_CHECK(cudaMalloc(&dSorted_,    sizeof(int) * n));
+    CUDA_CHECK(cudaMalloc(&dId_,        sizeof(int) * n));
+    CUDA_CHECK(cudaMalloc(&dIdTmp_,     sizeof(int) * n));
 
-    CUDA_CHECK(cudaMalloc(&d_nbr,      sizeof(int) * n * m_p.maxNeighbors));
-    CUDA_CHECK(cudaMalloc(&d_nbrCount, sizeof(int) * n));
-    CUDA_CHECK(cudaMalloc(&d_overflow, sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&dNbr_,      sizeof(int) * n * params_.maxNeighbors));
+    CUDA_CHECK(cudaMalloc(&dNbrCount_, sizeof(int) * n));
+    CUDA_CHECK(cudaMalloc(&dOverflow_, sizeof(int)));
 
-    CUDA_CHECK(cudaMalloc(&d_stats, sizeof(GpuStats)));
+    CUDA_CHECK(cudaMalloc(&dStats_, sizeof(GpuStats)));
 
-    CUDA_CHECK(cudaMemset(d_v, 0, sizeof(Vec3) * n));
-    CUDA_CHECK(cudaMemset(d_overflow, 0, sizeof(int)));
+    CUDA_CHECK(cudaMemset(dV_, 0, sizeof(Vec3) * n));
+    CUDA_CHECK(cudaMemset(dOverflow_, 0, sizeof(int)));
 
-    kInitIds<<<gridFor(m_n), kBlock>>>(d_id, m_n);
+    kInitIds<<<gridFor(n_), kBlock>>>(dId_, n_);
     CUDA_CHECK_LAUNCH();
 
     size_t bytes = 0;
     cub::DeviceScan::InclusiveSum(nullptr, bytes,
-                                  d_cellCount, d_cellStart,
+                                  dCellCount_, dCellStart_,
                                   static_cast<int>(nc + 1));
-    m_scanTempBytes = bytes;
-    CUDA_CHECK(cudaMalloc(&d_scanTemp, bytes));
+    scanTempBytes_ = bytes;
+    CUDA_CHECK(cudaMalloc(&dScanTemp_, bytes));
 }
 
 static GpuParams makeGpuParams(const PbfParams& p,
@@ -612,138 +598,138 @@ static GpuParams makeGpuParams(const PbfParams& p,
 
 void CudaPbfSolver::findNeighbors()
 {
-    const GpuParams gp = makeGpuParams(m_p, m_kPoly6, m_kSpiky, m_wSelf, m_wDq,
-                                       m_gridLo, m_nx, m_ny, m_nz, m_nCells, m_n,
+    const GpuParams gp = makeGpuParams(params_, kPoly6_, kSpiky_, wSelf_, wDq_,
+                                       gridLo_, nx_, ny_, nz_, nCells_, n_,
                                        false);
-    const int blocks = gridFor(m_n);
+    const int blocks = gridFor(n_);
 
-    CUDA_CHECK(cudaMemset(d_cellCount, 0, sizeof(int) * (m_nCells + 1)));
+    CUDA_CHECK(cudaMemset(dCellCount_, 0, sizeof(int) * (nCells_ + 1)));
 
-    kCellOfAndCount<<<blocks, kBlock>>>(d_xp, d_cellOf, d_cellCount, gp);
+    kCellOfAndCount<<<blocks, kBlock>>>(dXp_, dCellOf_, dCellCount_, gp);
     CUDA_CHECK_LAUNCH();
 
-    auto bytes = static_cast<size_t>(m_scanTempBytes);
-    CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_scanTemp, bytes,
-                                             d_cellCount, d_cellStart,
-                                             m_nCells + 1));
+    auto bytes = static_cast<size_t>(scanTempBytes_);
+    CUDA_CHECK(cub::DeviceScan::InclusiveSum(dScanTemp_, bytes,
+                                             dCellCount_, dCellStart_,
+                                             nCells_ + 1));
 
-    CUDA_CHECK(cudaMemcpy(d_cursor, d_cellStart, sizeof(int) * m_nCells,
+    CUDA_CHECK(cudaMemcpy(dCursor_, dCellStart_, sizeof(int) * nCells_,
                           cudaMemcpyDeviceToDevice));
 
-    kScatter<<<blocks, kBlock>>>(d_cellOf, d_cursor, d_sorted, gp);
+    kScatter<<<blocks, kBlock>>>(dCellOf_, dCursor_, dSorted_, gp);
     CUDA_CHECK_LAUNCH();
 
-    kReorderState<<<blocks, kBlock>>>(d_sorted,
-                                      d_x, d_v, d_xp, d_id,
-                                      d_xTmp, d_vTmp, d_xpTmp, d_idTmp,
-                                      m_n);
+    kReorderState<<<blocks, kBlock>>>(dSorted_,
+                                      dX_, dV_, dXp_, dId_,
+                                      dXTmp_, dVTmp_, dXpTmp_, dIdTmp_,
+                                      n_);
     CUDA_CHECK_LAUNCH();
 
-    std::swap(d_x, d_xTmp);
-    std::swap(d_v, d_vTmp);
-    std::swap(d_xp, d_xpTmp);
-    std::swap(d_id, d_idTmp);
+    std::swap(dX_, dXTmp_);
+    std::swap(dV_, dVTmp_);
+    std::swap(dXp_, dXpTmp_);
+    std::swap(dId_, dIdTmp_);
 
-    kFindNeighbors<<<blocks, kBlock>>>(d_xp, d_cellStart,
-                                       d_nbr, d_nbrCount, d_overflow, gp);
+    kFindNeighbors<<<blocks, kBlock>>>(dXp_, dCellStart_,
+                                       dNbr_, dNbrCount_, dOverflow_, gp);
     CUDA_CHECK_LAUNCH();
 }
 
 void CudaPbfSolver::substep(float dt, bool wantStats)
 {
-    const GpuParams gp = makeGpuParams(m_p, m_kPoly6, m_kSpiky, m_wSelf, m_wDq,
-                                       m_gridLo, m_nx, m_ny, m_nz, m_nCells, m_n,
+    const GpuParams gp = makeGpuParams(params_, kPoly6_, kSpiky_, wSelf_, wDq_,
+                                       gridLo_, nx_, ny_, nz_, nCells_, n_,
                                        wantStats);
-    const int blocks = gridFor(m_n);
+    const int blocks = gridFor(n_);
 
-    kPredict<<<blocks, kBlock>>>(d_x, d_v, d_xp, gp, dt);
+    kPredict<<<blocks, kBlock>>>(dX_, dV_, dXp_, gp, dt);
     CUDA_CHECK_LAUNCH();
 
     findNeighbors();
 
-    for (int it = 0; it < m_p.solverIters; ++it) {
-        kComputeLambda<<<blocks, kBlock>>>(d_xp, d_nbr, d_nbrCount,
-                                           d_lambda, d_density, gp);
+    for (int it = 0; it < params_.solverIters; ++it) {
+        kComputeLambda<<<blocks, kBlock>>>(dXp_, dNbr_, dNbrCount_,
+                                           dLambda_, dDensity_, gp);
         CUDA_CHECK_LAUNCH();
 
-        kComputeDeltaP<<<blocks, kBlock>>>(d_xp, d_nbr, d_nbrCount,
-                                           d_lambda, d_dp, gp);
+        kComputeDeltaP<<<blocks, kBlock>>>(dXp_, dNbr_, dNbrCount_,
+                                           dLambda_, dDp_, gp);
         CUDA_CHECK_LAUNCH();
 
-        kApplyDeltaPAndBound<<<blocks, kBlock>>>(d_xp, d_dp, gp);
+        kApplyDeltaPAndBound<<<blocks, kBlock>>>(dXp_, dDp_, gp);
         CUDA_CHECK_LAUNCH();
     }
 
     if (wantStats) {
-        CUDA_CHECK(cudaMemset(d_stats, 0, sizeof(GpuStats)));
+        CUDA_CHECK(cudaMemset(dStats_, 0, sizeof(GpuStats)));
     }
 
-    kVelocityCommit<<<blocks, kBlock>>>(d_x, d_v, d_xp, d_density,
-                                        static_cast<GpuStats*>(d_stats), gp, dt);
+    kVelocityCommit<<<blocks, kBlock>>>(dX_, dV_, dXp_, dDensity_,
+                                        static_cast<GpuStats*>(dStats_), gp, dt);
     CUDA_CHECK_LAUNCH();
 
-    if (m_p.vorticity > 0.0f) {
-        kVorticityOmega<<<blocks, kBlock>>>(d_x, d_v, d_density,
-                                            d_nbr, d_nbrCount, d_omega, gp);
+    if (params_.vorticity > 0.0f) {
+        kVorticityOmega<<<blocks, kBlock>>>(dX_, dV_, dDensity_,
+                                            dNbr_, dNbrCount_, dOmega_, gp);
         CUDA_CHECK_LAUNCH();
 
-        kVorticityApply<<<blocks, kBlock>>>(d_x, d_v, d_density,
-                                            d_nbr, d_nbrCount, d_omega, gp, dt);
-        CUDA_CHECK_LAUNCH();
-    }
-
-    if (m_p.xsph > 0.0f) {
-        kXsphCompute<<<blocks, kBlock>>>(d_x, d_v, d_density,
-                                         d_nbr, d_nbrCount, d_dv, gp);
-        CUDA_CHECK_LAUNCH();
-
-        kXsphApply<<<blocks, kBlock>>>(d_v, d_dv, gp);
+        kVorticityApply<<<blocks, kBlock>>>(dX_, dV_, dDensity_,
+                                            dNbr_, dNbrCount_, dOmega_, gp, dt);
         CUDA_CHECK_LAUNCH();
     }
 
-    kCflClamp2<<<blocks, kBlock>>>(d_v, static_cast<GpuStats*>(d_stats), gp, dt);
+    if (params_.xsph > 0.0f) {
+        kXsphCompute<<<blocks, kBlock>>>(dX_, dV_, dDensity_,
+                                         dNbr_, dNbrCount_, dDv_, gp);
+        CUDA_CHECK_LAUNCH();
+
+        kXsphApply<<<blocks, kBlock>>>(dV_, dDv_, gp);
+        CUDA_CHECK_LAUNCH();
+    }
+
+    kCflClamp2<<<blocks, kBlock>>>(dV_, static_cast<GpuStats*>(dStats_), gp, dt);
     CUDA_CHECK_LAUNCH();
 }
 
 void CudaPbfSolver::step(float dtFrame)
 {
-    if (m_n == 0) return;
+    if (n_ == 0) return;
 
-    const float dt = dtFrame / static_cast<float>(m_p.substeps);
+    const float dt = dtFrame / static_cast<float>(params_.substeps);
 
-    for (int s = 0; s < m_p.substeps; ++s) {
-        substep(dt, m_debug && s == m_p.substeps - 1);
+    for (int s = 0; s < params_.substeps; ++s) {
+        substep(dt, debug_ && s == params_.substeps - 1);
     }
 
-    if (m_debug) {
+    if (debug_) {
         GpuStats gs{};
-        CUDA_CHECK(cudaMemcpy(&gs, d_stats, sizeof(GpuStats), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(&gs, dStats_, sizeof(GpuStats), cudaMemcpyDeviceToHost));
 
-        m_stats = PbfStats();
-        m_stats.rhoAvg   = m_n ? gs.rhoSum / static_cast<float>(m_n) : 0.0f;
-        m_stats.rhoMax   = gs.rhoMax;
-        m_stats.vMax     = gs.vMax;
-        m_stats.momentum = Vec3(gs.momX, gs.momY, gs.momZ);
-        m_stats.clamped  = gs.clamped;
-        m_stats.cflHits  = gs.cflHits;
+        stats_ = PbfStats();
+        stats_.rhoAvg   = n_ ? gs.rhoSum / static_cast<float>(n_) : 0.0f;
+        stats_.rhoMax   = gs.rhoMax;
+        stats_.vMax     = gs.vMax;
+        stats_.momentum = Vec3(gs.momX, gs.momY, gs.momZ);
+        stats_.clamped  = gs.clamped;
+        stats_.cflHits  = gs.cflHits;
     } else {
-        m_stats = PbfStats();
+        stats_ = PbfStats();
     }
 
-    m_hostPositionsDirty = true;
+    hostPositionsDirty_ = true;
 }
 
 const std::vector<Vec3>& CudaPbfSolver::positions() const
 {
-    if (!m_hostPositionsDirty) return m_hostX;
+    if (!hostPositionsDirty_) return hostX_;
 
-    kScatterVec3ById<<<gridFor(m_n), kBlock>>>(d_x, d_id, d_xTmp, m_n);
+    kScatterVec3ById<<<gridFor(n_), kBlock>>>(dX_, dId_, dXTmp_, n_);
     CUDA_CHECK_LAUNCH();
 
-    CUDA_CHECK(cudaMemcpy(m_hostX.data(), d_xTmp,
-                          sizeof(Vec3) * m_n, cudaMemcpyDeviceToHost));
-    m_hostPositionsDirty = false;
-    return m_hostX;
+    CUDA_CHECK(cudaMemcpy(hostX_.data(), dXTmp_,
+                          sizeof(Vec3) * n_, cudaMemcpyDeviceToHost));
+    hostPositionsDirty_ = false;
+    return hostX_;
 }
 
 void CudaPbfSolver::copyPositionsToDevice(Vec3* destination,
@@ -752,58 +738,58 @@ void CudaPbfSolver::copyPositionsToDevice(Vec3* destination,
     if (destination == nullptr) {
         throw std::invalid_argument("CUDA position destination is null");
     }
-    if (destinationCount < static_cast<std::size_t>(m_n)) {
+    if (destinationCount < static_cast<std::size_t>(n_)) {
         throw std::invalid_argument("CUDA position destination is too small");
     }
 
-    CUDA_CHECK(cudaMemcpyAsync(destination, d_x, sizeof(Vec3) * m_n,
+    CUDA_CHECK(cudaMemcpyAsync(destination, dX_, sizeof(Vec3) * n_,
                                cudaMemcpyDeviceToDevice));
 }
 
 void CudaPbfSolver::downloadVelocities(std::vector<Vec3>& out) const
 {
-    out.resize(m_n);
-    kScatterVec3ById<<<gridFor(m_n), kBlock>>>(d_v, d_id, d_vTmp, m_n);
+    out.resize(n_);
+    kScatterVec3ById<<<gridFor(n_), kBlock>>>(dV_, dId_, dVTmp_, n_);
     CUDA_CHECK_LAUNCH();
-    CUDA_CHECK(cudaMemcpy(out.data(), d_vTmp, sizeof(Vec3) * m_n,
+    CUDA_CHECK(cudaMemcpy(out.data(), dVTmp_, sizeof(Vec3) * n_,
                           cudaMemcpyDeviceToHost));
 }
 
 void CudaPbfSolver::downloadDensities(std::vector<float>& out) const
 {
-    std::vector<float> sortedDensity(m_n);
-    std::vector<int> ids(m_n);
+    std::vector<float> sortedDensity(n_);
+    std::vector<int> ids(n_);
 
-    CUDA_CHECK(cudaMemcpy(sortedDensity.data(), d_density, sizeof(float) * m_n,
+    CUDA_CHECK(cudaMemcpy(sortedDensity.data(), dDensity_, sizeof(float) * n_,
                           cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(ids.data(), d_id, sizeof(int) * m_n,
+    CUDA_CHECK(cudaMemcpy(ids.data(), dId_, sizeof(int) * n_,
                           cudaMemcpyDeviceToHost));
 
-    out.resize(m_n);
-    for (int slot = 0; slot < m_n; ++slot) {
+    out.resize(n_);
+    for (int slot = 0; slot < n_; ++slot) {
         out[ids[slot]] = sortedDensity[slot];
     }
 }
 
 void CudaPbfSolver::downloadNeighbors(std::vector<std::vector<int>>& out) const
 {
-    std::vector<int> flat(static_cast<size_t>(m_n) * m_p.maxNeighbors);
-    std::vector<int> counts(m_n);
-    std::vector<int> ids(m_n);
+    std::vector<int> flat(static_cast<size_t>(n_) * params_.maxNeighbors);
+    std::vector<int> counts(n_);
+    std::vector<int> ids(n_);
 
-    CUDA_CHECK(cudaMemcpy(flat.data(), d_nbr,
+    CUDA_CHECK(cudaMemcpy(flat.data(), dNbr_,
                           sizeof(int) * flat.size(), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(counts.data(), d_nbrCount,
-                          sizeof(int) * m_n, cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(ids.data(), d_id,
-                          sizeof(int) * m_n, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(counts.data(), dNbrCount_,
+                          sizeof(int) * n_, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(ids.data(), dId_,
+                          sizeof(int) * n_, cudaMemcpyDeviceToHost));
 
-    out.assign(m_n, {});
-    for (int slot = 0; slot < m_n; ++slot) {
+    out.assign(n_, {});
+    for (int slot = 0; slot < n_; ++slot) {
         const int originalId = ids[slot];
         out[originalId].resize(counts[slot]);
         for (int k = 0; k < counts[slot]; ++k) {
-            const int neighborSlot = flat[static_cast<size_t>(k) * m_n + slot];
+            const int neighborSlot = flat[static_cast<size_t>(k) * n_ + slot];
             out[originalId][k] = ids[neighborSlot];
         }
     }
@@ -812,6 +798,6 @@ void CudaPbfSolver::downloadNeighbors(std::vector<std::vector<int>>& out) const
 int CudaPbfSolver::neighborOverflow() const
 {
     int v = 0;
-    CUDA_CHECK(cudaMemcpy(&v, d_overflow, sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&v, dOverflow_, sizeof(int), cudaMemcpyDeviceToHost));
     return v;
 }

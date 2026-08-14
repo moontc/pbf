@@ -9,27 +9,27 @@
 #include <cmath>
 
 Camera::Camera(const glm::vec3& center, float dist)
-    : target(center), distance(dist)
+    : target_(center), distance_(dist)
 {
 }
 
 glm::vec3 Camera::position() const
 {
-    const float y = glm::radians(yaw);
-    const float p = glm::radians(pitch);
-    return target + distance * glm::vec3(std::cos(p) * std::cos(y),
+    const float y = glm::radians(yaw_);
+    const float p = glm::radians(pitch_);
+    return target_ + distance_ * glm::vec3(std::cos(p) * std::cos(y),
                                          std::sin(p),
                                          std::cos(p) * std::sin(y));
 }
 
 glm::mat4 Camera::view() const
 {
-    return glm::lookAt(position(), target, glm::vec3(0.0f, 1.0f, 0.0f));
+    return glm::lookAt(position(), target_, glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
 glm::mat4 Camera::projection() const
 {
-    return glm::perspective(glm::radians(fov), aspect, znear, zfar);
+    return glm::perspective(glm::radians(fov_), aspect_, znear_, zfar_);
 }
 
 glm::mat4 Camera::invProjection() const
@@ -44,15 +44,15 @@ glm::mat4 Camera::invView() const
 
 void Camera::rotate(float dxPixels, float dyPixels)
 {
-    yaw   += dxPixels * rotateSpeed;
-    pitch += dyPixels * rotateSpeed;
-    pitch  = std::clamp(pitch, 0.0f, maxPitch);
+    yaw_   += dxPixels * rotateSpeed_;
+    pitch_ += dyPixels * rotateSpeed_;
+    pitch_  = std::clamp(pitch_, 0.0f, maxPitch_);
 }
 
 void Camera::zoom(float steps)
 {
-    distance *= std::pow(1.0f - zoomSpeed, steps);
-    distance  = std::clamp(distance, minDistance, maxDistance);
+    distance_ *= std::pow(1.0f - zoomSpeed_, steps);
+    distance_  = std::clamp(distance_, minDistance_, maxDistance_);
 }
 
 void Camera::onMouseButton(int button, int action, int mods)
@@ -61,10 +61,10 @@ void Camera::onMouseButton(int button, int action, int mods)
 
     if (button == GLFW_MOUSE_BUTTON_LEFT)
     {
-        m_mode = down ? Mode::Rotate : Mode::None;
+        mode_ = down ? Mode::Rotate : Mode::None;
     }
 
-    m_firstMove = true;
+    firstMove_ = true;
 }
 
 void Camera::onCursorPos(double x, double y)
@@ -72,20 +72,20 @@ void Camera::onCursorPos(double x, double y)
     const float fx = static_cast<float>(x);
     const float fy = static_cast<float>(y);
 
-    if (m_firstMove)
+    if (firstMove_)
     {
-        m_lastX = fx;
-        m_lastY = fy;
-        m_firstMove = false;
+        lastX_ = fx;
+        lastY_ = fy;
+        firstMove_ = false;
         return;
     }
 
-    const float dx = fx - m_lastX;
-    const float dy = fy - m_lastY;
-    m_lastX = fx;
-    m_lastY = fy;
+    const float dx = fx - lastX_;
+    const float dy = fy - lastY_;
+    lastX_ = fx;
+    lastY_ = fy;
 
-    if (m_mode == Mode::Rotate) rotate(dx, dy);
+    if (mode_ == Mode::Rotate) rotate(dx, dy);
 }
 
 void Camera::onScroll(double /*dx*/, double dy)
@@ -96,7 +96,7 @@ void Camera::onScroll(double /*dx*/, double dy)
 void Camera::onResize(int width, int height)
 {
     if (height > 0)
-        aspect = static_cast<float>(width) / static_cast<float>(height);
+        aspect_ = static_cast<float>(width) / static_cast<float>(height);
 }
 
 void Camera::attach(GLFWwindow* window)

@@ -26,7 +26,7 @@ constexpr char kFragmentHead[] =
         R"glsl(#version 460 core
 
 uniform vec2 uProjXY;      // (proj[0][0], proj[1][1])
-uniform mat3 uInvViewRot;  // 视空间方向 -> 世界方向，即 view 旋转部分的转置
+uniform mat3 uInvViewRot;  // 视空间方向 -> 世界方向
 
 in  vec2 vNdc;
 out vec4 FragColor;

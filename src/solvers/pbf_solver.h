@@ -20,36 +20,36 @@ public:
     }
 
     void setParams(const PbfParams& p) {
-        m_p = p;
+        params_ = p;
 
-        // 315/(64 pi h^9)
-        m_kPoly6 = 315.0f / (64.0f * kPi * std::pow(m_p.h, 9.0f));
-        // -45/(pi h^6)
-        m_kSpiky = -45.0f / (kPi * std::pow(m_p.h, 6.0f));
+        // 315/(64 π h^9)
+        kPoly6_ = 315.0f / (64.0f * kPi_ * std::pow(params_.h, 9.0f));
+        // -45/(π h^6)
+        kSpiky_ = -45.0f / (kPi_ * std::pow(params_.h, 6.0f));
 
-        m_wSelf = wPoly6(0.0f);
+        wSelf_ = wPoly6(0.0f);
 
-        m_wDq = wPoly6(m_p.deltaQ * m_p.h);
-        if (m_wDq <= 0.0f) m_wDq = 1.0f;
+        wDq_ = wPoly6(params_.deltaQ * params_.h);
+        if (wDq_ <= 0.0f) wDq_ = 1.0f;
     }
 
-    const PbfParams& params() const { return m_p; }
+    const PbfParams& params() const { return params_; }
 
 
     void initBlock() {
-        const Vec3& lo = m_p.blockLo;
-        const Vec3& hi = m_p.blockHi;
+        const Vec3& lo = params_.blockLo;
+        const Vec3& hi = params_.blockHi;
 
-        std::mt19937 rng(m_p.seed);
+        std::mt19937 rng(params_.seed);
         std::uniform_real_distribution<float> jitter(-0.5f, 0.5f);
 
         const float amp = 1e-4f;
 
-        m_x.clear();
-        for (float px = lo.x; px <= hi.x + 1e-6f; px += m_p.d)
-        for (float py = lo.y; py <= hi.y + 1e-6f; py += m_p.d)
-        for (float pz = lo.z; pz <= hi.z + 1e-6f; pz += m_p.d) {
-            m_x.push_back(Vec3(px + jitter(rng) * amp,
+        positions_.clear();
+        for (float px = lo.x; px <= hi.x + 1e-6f; px += params_.d)
+        for (float py = lo.y; py <= hi.y + 1e-6f; py += params_.d)
+        for (float pz = lo.z; pz <= hi.z + 1e-6f; pz += params_.d) {
+            positions_.push_back(Vec3(px + jitter(rng) * amp,
                                py + jitter(rng) * amp,
                                pz + jitter(rng) * amp));
         }
@@ -57,106 +57,106 @@ public:
     }
 
     void step(float dtFrame) {
-        const float dt = dtFrame / static_cast<float>(m_p.substeps);
-        for (int s = 0; s < m_p.substeps; ++s) substep(dt);
+        const float dt = dtFrame / static_cast<float>(params_.substeps);
+        for (int s = 0; s < params_.substeps; ++s) substep(dt);
     }
 
 
-    int  count() const { return static_cast<int>(m_x.size()); }
-    const std::vector<Vec3>&  positions()  const { return m_x; }
-    const std::vector<Vec3>&  velocities() const { return m_v; }
-    const std::vector<float>& lambdas()    const { return m_lambda; }
-    const std::vector<float>& densities()  const { return m_density; }
-    const PbfStats& stats() const { return m_stats; }
+    int  count() const { return static_cast<int>(positions_.size()); }
+    const std::vector<Vec3>&  positions()  const { return positions_; }
+    const std::vector<Vec3>&  velocities() const { return velocities_; }
+    const std::vector<float>& lambdas()    const { return lambdas_; }
+    const std::vector<float>& densities()  const { return densities_; }
+    const PbfStats& stats() const { return stats_; }
 
-    const std::vector<std::vector<int>>& neighbors() const { return m_nbrs; }
+    const std::vector<std::vector<int>>& neighbors() const { return neighbors_; }
 
     float wPoly6(float r) const {
-        if (r < 0.0f || r >= m_p.h) return 0.0f;
-        const float t = m_p.h * m_p.h - r * r;
-        return m_kPoly6 * t * t * t;
+        if (r < 0.0f || r >= params_.h) return 0.0f;
+        const float t = params_.h * params_.h - r * r;
+        return kPoly6_ * t * t * t;
     }
 
     Vec3 gradWSpiky(const Vec3& rij) const {
         const float r = len(rij);
-        if (r >= m_p.h || r < 1e-9f) return Vec3(0, 0, 0);
-        const float c = m_kSpiky * (m_p.h - r) * (m_p.h - r);
+        if (r >= params_.h || r < 1e-9f) return Vec3(0, 0, 0);
+        const float c = kSpiky_ * (params_.h - r) * (params_.h - r);
         return rij * (c / r);
     }
 
 private:
     void allocate() {
-        const size_t n = m_x.size();
-        m_v.assign(n, Vec3(0, 0, 0));
-        m_xp.assign(n, Vec3(0, 0, 0));
-        m_dp.assign(n, Vec3(0, 0, 0));
-        m_lambda.assign(n, 0.0f);
-        m_density.assign(n, 0.0f);
-        m_nbrs.assign(n, {});
-        for (auto& v : m_nbrs) v.reserve(m_p.maxNeighbors);
+        const size_t n = positions_.size();
+        velocities_.assign(n, Vec3(0, 0, 0));
+        predictedPositions_.assign(n, Vec3(0, 0, 0));
+        positionDeltas_.assign(n, Vec3(0, 0, 0));
+        lambdas_.assign(n, 0.0f);
+        densities_.assign(n, 0.0f);
+        neighbors_.assign(n, {});
+        for (auto& v : neighbors_) v.reserve(params_.maxNeighbors);
     }
 
     void buildGrid() {
         const int n = count();
 
-        const float pad = 2.0f * m_p.h;
-        m_gridLo = Vec3(m_p.boxLo.x - pad, m_p.boxLo.y - pad, m_p.boxLo.z - pad);
-        const Vec3 hi(m_p.boxHi.x + pad, m_p.boxHi.y + pad, m_p.boxHi.z + pad);
+        const float pad = 2.0f * params_.h;
+        gridLo_ = Vec3(params_.boxLo.x - pad, params_.boxLo.y - pad, params_.boxLo.z - pad);
+        const Vec3 hi(params_.boxHi.x + pad, params_.boxHi.y + pad, params_.boxHi.z + pad);
 
-        const float inv = 1.0f / m_p.h;
-        m_nx = std::max(1, static_cast<int>((hi.x - m_gridLo.x) * inv) + 1);
-        m_ny = std::max(1, static_cast<int>((hi.y - m_gridLo.y) * inv) + 1);
-        m_nz = std::max(1, static_cast<int>((hi.z - m_gridLo.z) * inv) + 1);
-        const int nCells = m_nx * m_ny * m_nz;
+        const float inv = 1.0f / params_.h;
+        nx_ = std::max(1, static_cast<int>((hi.x - gridLo_.x) * inv) + 1);
+        ny_ = std::max(1, static_cast<int>((hi.y - gridLo_.y) * inv) + 1);
+        nz_ = std::max(1, static_cast<int>((hi.z - gridLo_.z) * inv) + 1);
+        const int nCells = nx_ * ny_ * nz_;
 
-        m_cellOf.resize(n);
-        m_sorted.resize(n);
-        m_cellStart.assign(nCells + 1, 0);
+        cellOf_.resize(n);
+        sorted_.resize(n);
+        cellStart_.assign(nCells + 1, 0);
 
         for (int i = 0; i < n; ++i) {
-            const int cx = std::clamp(static_cast<int>((m_xp[i].x - m_gridLo.x) * inv), 0, m_nx - 1);
-            const int cy = std::clamp(static_cast<int>((m_xp[i].y - m_gridLo.y) * inv), 0, m_ny - 1);
-            const int cz = std::clamp(static_cast<int>((m_xp[i].z - m_gridLo.z) * inv), 0, m_nz - 1);
-            m_cellOf[i] = (cz * m_ny + cy) * m_nx + cx;
+            const int cx = std::clamp(static_cast<int>((predictedPositions_[i].x - gridLo_.x) * inv), 0, nx_ - 1);
+            const int cy = std::clamp(static_cast<int>((predictedPositions_[i].y - gridLo_.y) * inv), 0, ny_ - 1);
+            const int cz = std::clamp(static_cast<int>((predictedPositions_[i].z - gridLo_.z) * inv), 0, nz_ - 1);
+            cellOf_[i] = (cz * ny_ + cy) * nx_ + cx;
         }
 
-        for (int i = 0; i < n; ++i) ++m_cellStart[m_cellOf[i] + 1];
+        for (int i = 0; i < n; ++i) ++cellStart_[cellOf_[i] + 1];
 
-        for (int c = 0; c < nCells; ++c) m_cellStart[c + 1] += m_cellStart[c];
+        for (int c = 0; c < nCells; ++c) cellStart_[c + 1] += cellStart_[c];
 
-        m_cursor.assign(m_cellStart.begin(), m_cellStart.end() - 1);
-        for (int i = 0; i < n; ++i) m_sorted[m_cursor[m_cellOf[i]]++] = i;
+        cursor_.assign(cellStart_.begin(), cellStart_.end() - 1);
+        for (int i = 0; i < n; ++i) sorted_[cursor_[cellOf_[i]]++] = i;
     }
 
     void findNeighbors() {
         buildGrid();
 
         const int n = count();
-        const float h2 = m_p.h * m_p.h;
-        const float inv = 1.0f / m_p.h;
+        const float h2 = params_.h * params_.h;
+        const float inv = 1.0f / params_.h;
 
         #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
-            m_nbrs[i].clear();
+            neighbors_[i].clear();
 
-            const int cx = std::clamp(static_cast<int>((m_xp[i].x - m_gridLo.x) * inv), 0, m_nx - 1);
-            const int cy = std::clamp(static_cast<int>((m_xp[i].y - m_gridLo.y) * inv), 0, m_ny - 1);
-            const int cz = std::clamp(static_cast<int>((m_xp[i].z - m_gridLo.z) * inv), 0, m_nz - 1);
+            const int cx = std::clamp(static_cast<int>((predictedPositions_[i].x - gridLo_.x) * inv), 0, nx_ - 1);
+            const int cy = std::clamp(static_cast<int>((predictedPositions_[i].y - gridLo_.y) * inv), 0, ny_ - 1);
+            const int cz = std::clamp(static_cast<int>((predictedPositions_[i].z - gridLo_.z) * inv), 0, nz_ - 1);
 
             for (int dz = -1; dz <= 1; ++dz) {
-                const int z = cz + dz;  if (z < 0 || z >= m_nz) continue;
+                const int z = cz + dz;  if (z < 0 || z >= nz_) continue;
                 for (int dy = -1; dy <= 1; ++dy) {
-                    const int y = cy + dy;  if (y < 0 || y >= m_ny) continue;
+                    const int y = cy + dy;  if (y < 0 || y >= ny_) continue;
                     for (int dx = -1; dx <= 1; ++dx) {
-                        const int x = cx + dx;  if (x < 0 || x >= m_nx) continue;
+                        const int x = cx + dx;  if (x < 0 || x >= nx_) continue;
 
-                        const int c = (z * m_ny + y) * m_nx + x;
+                        const int c = (z * ny_ + y) * nx_ + x;
 
-                        for (int k = m_cellStart[c]; k < m_cellStart[c + 1]; ++k) {
-                            const int j = m_sorted[k];
+                        for (int k = cellStart_[c]; k < cellStart_[c + 1]; ++k) {
+                            const int j = sorted_[k];
                             if (j == i) continue;
-                            const Vec3 d = m_xp[i] - m_xp[j];
-                            if (dot(d, d) < h2) m_nbrs[i].push_back(j);
+                            const Vec3 d = predictedPositions_[i] - predictedPositions_[j];
+                            if (dot(d, d) < h2) neighbors_[i].push_back(j);
                         }
                     }
                 }
@@ -170,65 +170,65 @@ private:
         #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
 
-            float rho = m_p.mass * m_wSelf;
+            float rho = params_.mass * wSelf_;
 
             Vec3  gradI(0, 0, 0);   // 公式 (8) 上半支 k=i：向量累加
             float sumSq = 0.0f;     // 公式 (8) 下半支 k=j：标量累加
 
-            for (int j : m_nbrs[i]) {
-                const Vec3 rij = m_xp[i] - m_xp[j];
-                rho += m_p.mass * wPoly6(len(rij));
+            for (int j : neighbors_[i]) {
+                const Vec3 rij = predictedPositions_[i] - predictedPositions_[j];
+                rho += params_.mass * wPoly6(len(rij));
 
-                // grad C = (m/rho0) * grad W
-                const Vec3 g = gradWSpiky(rij) * (m_p.mass / m_p.rho0);
+                // 约束梯度：grad C = (m/rho0) * grad W
+                const Vec3 g = gradWSpiky(rij) * (params_.mass / params_.rho0);
                 gradI += g;
                 sumSq += dot(g, g);
             }
             sumSq += dot(gradI, gradI);
 
-            m_density[i] = rho;
+            densities_[i] = rho;
 
-            const float C = rho / m_p.rho0 - 1.0f;
+            const float C = rho / params_.rho0 - 1.0f;
 
             // 公式 (11)：CFM 正则化。
-            m_lambda[i] = -C / (sumSq + m_p.eps);
+            lambdas_[i] = -C / (sumSq + params_.eps);
         }
     }
 
     void computeDeltaP() {
         const int n = count();
-        const bool useScorr = (m_p.kCorr > 0.0f);
+        const bool useScorr = (params_.kCorr > 0.0f);
 
         #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
             Vec3 dp(0, 0, 0);
-            for (int j : m_nbrs[i]) {
-                const Vec3 rij = m_xp[i] - m_xp[j];
+            for (int j : neighbors_[i]) {
+                const Vec3 rij = predictedPositions_[i] - predictedPositions_[j];
 
-                float coef = m_lambda[i] + m_lambda[j];
+                float coef = lambdas_[i] + lambdas_[j];
 
                 if (useScorr) {
-                    float ratio = wPoly6(len(rij)) / m_wDq;
+                    float ratio = wPoly6(len(rij)) / wDq_;
                     float pw = 1.0f;
-                    for (int e = 0; e < m_p.nCorr; ++e) pw *= ratio;
-                    coef += -m_p.kCorr * pw;
+                    for (int e = 0; e < params_.nCorr; ++e) pw *= ratio;
+                    coef += -params_.kCorr * pw;
                 }
 
                 dp += gradWSpiky(rij) * coef;
             }
 
-            m_dp[i] = dp * (m_p.mass / m_p.rho0 * m_p.omega);
+            positionDeltas_[i] = dp * (params_.mass / params_.rho0 * params_.omega);
         }
     }
 
     void enforceBoundary() {
         const int   n = count();
-        const float m = 0.5f * m_p.d;
-        const float lo[3] = { m_p.boxLo.x + m, m_p.boxLo.y + m, m_p.boxLo.z + m };
-        const float hi[3] = { m_p.boxHi.x - m, m_p.boxHi.y - m, m_p.boxHi.z - m };
+        const float m = 0.5f * params_.d;
+        const float lo[3] = { params_.boxLo.x + m, params_.boxLo.y + m, params_.boxLo.z + m };
+        const float hi[3] = { params_.boxHi.x - m, params_.boxHi.y - m, params_.boxHi.z - m };
 
         for (int i = 0; i < n; ++i) {
-            float* p = &m_xp[i].x;
+            float* p = &predictedPositions_[i].x;
             for (int a = 0; a < 3; ++a) {
                 if (p[a] < lo[a]) p[a] = lo[a];
                 if (p[a] > hi[a]) p[a] = hi[a];
@@ -237,138 +237,138 @@ private:
     }
 
     void applyVorticity(float dt) {
-        if (m_p.vorticity <= 0.0f) return;
+        if (params_.vorticity <= 0.0f) return;
         const int n = count();
 
         // 公式 15
-        m_omega.assign(n, Vec3(0, 0, 0));
+        omega_.assign(n, Vec3(0, 0, 0));
         #pragma omp parallel for
         for (int i = 0; i < n; ++i)
-            for (int j : m_nbrs[i]) {
+            for (int j : neighbors_[i]) {
 
-                const Vec3 g = gradWSpiky(m_x[i] - m_x[j]) * (-m_p.mass / m_density[j]);
-                m_omega[i] += cross(m_v[j] - m_v[i], g);
+                const Vec3 g = gradWSpiky(positions_[i] - positions_[j]) * (-params_.mass / densities_[j]);
+                omega_[i] += cross(velocities_[j] - velocities_[i], g);
             }
 
         // eta = grad|omega| -> N -> 加力（公式 16）
         #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
             Vec3 eta(0, 0, 0);
-            for (int j : m_nbrs[i]) {
-                const Vec3 g = gradWSpiky(m_x[i] - m_x[j]) * (m_p.mass / m_density[j]);
-                eta += g * (len(m_omega[j]) - len(m_omega[i]));
+            for (int j : neighbors_[i]) {
+                const Vec3 g = gradWSpiky(positions_[i] - positions_[j]) * (params_.mass / densities_[j]);
+                eta += g * (len(omega_[j]) - len(omega_[i]));
             }
             const float e = len(eta);
             if (e < 1e-9f) continue;
             const Vec3 N = eta * (1.0f / e);
-            m_v[i] += cross(N, m_omega[i]) * (m_p.vorticity * dt);
+            velocities_[i] += cross(N, omega_[i]) * (params_.vorticity * dt);
         }
     }
 
     void applyXSPH(float /*dt*/) {
-        if (m_p.xsph <= 0.0f) return;
+        if (params_.xsph <= 0.0f) return;
         const int n = count();
 
         std::vector<Vec3> dv(n, Vec3(0, 0, 0));
         #pragma omp parallel for
         for (int i = 0; i < n; ++i) {
-            const float rhoI = m_density[i];
-            for (int j : m_nbrs[i]) {
-                const float w = wPoly6(len(m_x[i] - m_x[j]));
+            const float rhoI = densities_[i];
+            for (int j : neighbors_[i]) {
+                const float w = wPoly6(len(positions_[i] - positions_[j]));
 
-                const float wt = 2.0f * m_p.mass / (rhoI + m_density[j]);
-                dv[i] += (m_v[j] - m_v[i]) * (m_p.xsph * wt * w);
+                const float wt = 2.0f * params_.mass / (rhoI + densities_[j]);
+                dv[i] += (velocities_[j] - velocities_[i]) * (params_.xsph * wt * w);
             }
         }
-        for (int i = 0; i < n; ++i) m_v[i] += dv[i];
+        for (int i = 0; i < n; ++i) velocities_[i] += dv[i];
     }
 
     void substep(float dt) {
         const int n = count();
 
-        // apply forces
+        // 施加外力
         for (int i = 0; i < n; ++i) {
-            m_v[i] += m_p.gravity * dt;
-            m_xp[i] = m_x[i] + m_v[i] * dt;
+            velocities_[i] += params_.gravity * dt;
+            predictedPositions_[i] = positions_[i] + velocities_[i] * dt;
         }
 
         findNeighbors();
 
-        for (int it = 0; it < m_p.solverIters; ++it) {
+        for (int it = 0; it < params_.solverIters; ++it) {
             computeLambda();
             computeDeltaP();
-            for (int i = 0; i < n; ++i) m_xp[i] += m_dp[i];
+            for (int i = 0; i < n; ++i) predictedPositions_[i] += positionDeltas_[i];
             enforceBoundary();
         }
 
         // 反推速度，提交位置
-        m_stats = PbfStats();
-        const float lim = m_p.cflFactor * m_p.h / dt;
-        const float mrg = 0.5f * m_p.d;
+        stats_ = PbfStats();
+        const float lim = params_.cflFactor * params_.h / dt;
+        const float mrg = 0.5f * params_.d;
 
         for (int i = 0; i < n; ++i) {
-            m_v[i] = (m_xp[i] - m_x[i]) * (1.0f / dt);
+            velocities_[i] = (predictedPositions_[i] - positions_[i]) * (1.0f / dt);
 
             // CFL 安全网
-            const float sp = len(m_v[i]);
+            const float sp = len(velocities_[i]);
             if (sp > lim) {
-                m_v[i]  = m_v[i] * (lim / sp);
-                m_xp[i] = m_x[i] + m_v[i] * dt;
-                ++m_stats.cflHits;
+                velocities_[i]  = velocities_[i] * (lim / sp);
+                predictedPositions_[i] = positions_[i] + velocities_[i] * dt;
+                ++stats_.cflHits;
             }
 
-            m_x[i] = m_xp[i];
+            positions_[i] = predictedPositions_[i];
 
             // 收集诊断量
-            m_stats.rhoAvg   += m_density[i];
-            m_stats.rhoMax    = std::max(m_stats.rhoMax, m_density[i]);
-            m_stats.vMax      = std::max(m_stats.vMax, len(m_v[i]));
-            m_stats.momentum += m_v[i] * m_p.mass;
+            stats_.rhoAvg   += densities_[i];
+            stats_.rhoMax    = std::max(stats_.rhoMax, densities_[i]);
+            stats_.vMax      = std::max(stats_.vMax, len(velocities_[i]));
+            stats_.momentum += velocities_[i] * params_.mass;
 
-            const float* p = &m_x[i].x;
-            if (p[0] < m_p.boxLo.x + mrg + 1e-6f || p[0] > m_p.boxHi.x - mrg - 1e-6f ||
-                p[1] < m_p.boxLo.y + mrg + 1e-6f || p[1] > m_p.boxHi.y - mrg - 1e-6f ||
-                p[2] < m_p.boxLo.z + mrg + 1e-6f || p[2] > m_p.boxHi.z - mrg - 1e-6f)
-                ++m_stats.clamped;
+            const float* p = &positions_[i].x;
+            if (p[0] < params_.boxLo.x + mrg + 1e-6f || p[0] > params_.boxHi.x - mrg - 1e-6f ||
+                p[1] < params_.boxLo.y + mrg + 1e-6f || p[1] > params_.boxHi.y - mrg - 1e-6f ||
+                p[2] < params_.boxLo.z + mrg + 1e-6f || p[2] > params_.boxHi.z - mrg - 1e-6f)
+                ++stats_.clamped;
         }
-        if (n) m_stats.rhoAvg /= static_cast<float>(n);
+        if (n) stats_.rhoAvg /= static_cast<float>(n);
 
         applyVorticity(dt);
         applyXSPH(dt);
 
         for (int i = 0; i < n; ++i) {
-            float sp = len(m_v[i]);
-            if (sp > lim) { m_v[i] = m_v[i] * (lim / sp); ++m_stats.cflHits; }
-            m_stats.vMax = std::max(m_stats.vMax, len(m_v[i]));
+            float sp = len(velocities_[i]);
+            if (sp > lim) { velocities_[i] = velocities_[i] * (lim / sp); ++stats_.cflHits; }
+            stats_.vMax = std::max(stats_.vMax, len(velocities_[i]));
         }
     }
 
 
-    static constexpr float kPi = 3.14159265358979323846f;
+    static constexpr float kPi_ = 3.14159265358979323846f;
 
-    PbfParams m_p;
-    float m_kPoly6 = 0.0f;          // Poly6 归一化系数
-    float m_kSpiky = 0.0f;          // Spiky 梯度系数
-    float m_wSelf  = 0.0f;          // W(0,h)，密度的自身项
+    PbfParams params_;
+    float kPoly6_ = 0.0f;          // Poly6 归一化系数
+    float kSpiky_ = 0.0f;          // Spiky 梯度系数
+    float wSelf_  = 0.0f;          // W(0,h)，密度的自身项
 
-    std::vector<Vec3>  m_x;        // 位置（帧开始时）
-    std::vector<Vec3>  m_v;        // 速度
-    std::vector<Vec3>  m_xp;       // 预测位置 x*
-    std::vector<Vec3>  m_dp;       // 位置修正
-    std::vector<float> m_lambda;   // 拉格朗日乘子
-    std::vector<float> m_density;  // 密度
+    std::vector<Vec3>  positions_;                  // 位置（帧开始时）
+    std::vector<Vec3>  velocities_;                 // 速度
+    std::vector<Vec3>  predictedPositions_;         // 预测位置 x*
+    std::vector<Vec3>  positionDeltas_;             // 位置修正
+    std::vector<float> lambdas_;                    // 拉格朗日乘子
+    std::vector<float> densities_;                  // 密度
 
-    std::vector<std::vector<int>> m_nbrs;
-    Vec3 m_gridLo = Vec3(0, 0, 0);
-    int  m_nx = 1, m_ny = 1, m_nz = 1;
-    std::vector<int> m_cellOf;
-    std::vector<int> m_sorted;
-    std::vector<int> m_cellStart;
-    std::vector<int> m_cursor;
+    std::vector<std::vector<int>> neighbors_;
+    Vec3 gridLo_ = Vec3(0, 0, 0);
+    int  nx_ = 1, ny_ = 1, nz_ = 1;
+    std::vector<int> cellOf_;
+    std::vector<int> sorted_;
+    std::vector<int> cellStart_;
+    std::vector<int> cursor_;
 
-    float m_wDq = 1.0f;
+    float wDq_ = 1.0f;
 
-    std::vector<Vec3> m_omega;
+    std::vector<Vec3> omega_;
 
-    PbfStats m_stats;
+    PbfStats stats_;
 };

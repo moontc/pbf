@@ -66,7 +66,7 @@ private:
     GLint radiusLocation_ = -1;
     GLint viewportHLocation_ = -1;
 
-    GLuint fbo_ = 0;
+    GLuint depthFbo_ = 0;
     GLuint depthField_ = 0;
     GLuint depthBuffer_ = 0;
     int    targetWidth_ = 0;
@@ -89,12 +89,10 @@ private:
     GLint  blurRadiusScaleLocation_ = -1;
     GLint  blurScaleLocation_ = -1;
 
-    // 背景：画水之前的整幅屏幕内容，折射用它当被错位采样的对象。
-    // 不挂 FBO，只被 glCopyTextureSubImage2D 写、被表面着色器读。
+    // 画水之前的整幅屏幕内容
     GLuint backgroundField_ = 0;
 
     // 表面着色：读平滑后的深度场、厚度场和背景，重建法线 + 折射/反射/菲涅耳。
-    // emptyVao_ 给全屏三角形用——核心 profile 下没绑 VAO 的 glDrawArrays 什么都不画。
     GLuint surfaceProgram_ = 0;
     GLuint emptyVao_ = 0;
     GLint  surfaceProjXYLocation_ = -1;
@@ -105,19 +103,18 @@ private:
 
     std::size_t particleCount_ = 0;
 
-public:
     // 空间标准差 σ_s 对应的滤波半径，以"粒子半径"为单位
-    float blurScale   = 3.0f;
+    float blurScale_   = 3.0f;
 
     // 法线重建时判定"这两侧是不是同一层水面"的深度差阈值，单位是粒子半径。
-    // uNormalDepthThreshold = 2 · sigmaRange · r。
-    float sigmaRange  = 4.0f;
+    // uNormalDepthThreshold = 2 · sigmaRange_ · r。
+    float sigmaRange_  = 4.0f;
 
     // Beer-Lambert 吸收系数的夸大倍数。
-    // σ = absorbScale · (0.45, 0.074, 0.02)
-    float absorbScale = 2.0f;
+    // σ = absorbScale_ · (0.45, 0.074, 0.02)
+    float absorbScale_ = 2.0f;
 
     // 折射错位量的人为倍数
     // Δuv = (1 - 1/η) · thickness · -n.xy · (p₀₀, p₁₁) / (2z)
-    float refractScale = 1.0f;
+    float refractScale_ = 1.0f;
 };

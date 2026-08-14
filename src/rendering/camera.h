@@ -19,21 +19,21 @@ public:
     void attach(GLFWwindow* window);
 
 private:
-    glm::vec3 target{0.0f};
-    float distance = 5.0f;
-    float yaw      = -45.0f;
-    float pitch    = 20.0f;
+    glm::vec3 target_{0.0f};
+    float distance_ = 5.0f;
+    float yaw_      = -45.0f;
+    float pitch_    = 20.0f;
 
-    float fov    = 45.0f;
-    float aspect = 16.0f / 9.0f;
-    float znear  = 0.1f;
-    float zfar   = 100.0f;
+    float fov_    = 45.0f;
+    float aspect_ = 16.0f / 9.0f;
+    float znear_  = 0.1f;
+    float zfar_   = 100.0f;
 
-    float rotateSpeed = 0.3f;
-    float zoomSpeed   = 0.1f;
-    float minDistance = 1.0f;
-    float maxDistance = 10.0f;
-    float maxPitch    = 89.0f;
+    float rotateSpeed_ = 0.3f;
+    float zoomSpeed_   = 0.1f;
+    float minDistance_ = 1.0f;
+    float maxDistance_ = 10.0f;
+    float maxPitch_    = 89.0f;
 
     enum class Mode { None, Rotate };
 
@@ -46,8 +46,8 @@ private:
     void onScroll(double dx, double dy);
     void onResize(int width, int height);
 
-    Mode  m_mode      = Mode::None;
-    bool  m_firstMove = true;
-    float m_lastX     = 0.0f;
-    float m_lastY     = 0.0f;
+    Mode  mode_      = Mode::None;
+    bool  firstMove_ = true;
+    float lastX_     = 0.0f;
+    float lastY_     = 0.0f;
 };
