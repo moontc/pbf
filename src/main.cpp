@@ -177,6 +177,8 @@ int main() {
         float  accumulator = 0.0f;
         double lastFrameTime = glfwGetTime();
 
+        bool wasResetKeyDown = false;
+
         FrameProfiler profiler(kProfileFrames);
 
         while (!glfwWindowShouldClose(window)) {
@@ -186,6 +188,16 @@ int main() {
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
+
+            const bool isResetKeyDown = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
+
+            if (isResetKeyDown && !wasResetKeyDown) {
+                solver.initBlock();
+                fluid.updatePositions(solver);
+
+                accumulator = 0.0f;
+            }
+            wasResetKeyDown = isResetKeyDown;
 
             const double currentTime = glfwGetTime();
             accumulator += static_cast<float>(currentTime - lastFrameTime);
