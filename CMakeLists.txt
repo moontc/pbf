@@ -69,6 +69,7 @@ target_link_libraries(pbf_solver PUBLIC
 # 该选项只用于 CUDA 源文件，不影响 C++ 源文件。
 target_compile_options(pbf_solver PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
+)
 
 add_executable(pbf src/main.cpp
         src/rendering/camera.cpp
@@ -92,4 +93,4 @@ target_link_libraries(pbf PRIVATE
 
 if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/CMakeLists.txt)
     add_subdirectory(test)
-endif ()
+endif()
